@@ -41,7 +41,7 @@
    * Verbose version identifier which should contain a reference to the location
    * from where the binary was downloaded or the source code was compiled.
    */
-  #define DETAILED_BUILD_VERSION SHORT_BUILD_VERSION " (ADVi3++ 2.0.1)"
+  #define DETAILED_BUILD_VERSION SHORT_BUILD_VERSION " (ADVi3++ 2.1.0)"
 
   /**
    * The STRING_DISTRIBUTION_DATE represents when the binary file was built,

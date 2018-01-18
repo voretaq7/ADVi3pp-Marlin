@@ -24,8 +24,8 @@
 #define ULTRALCD_H
 
 #include "Marlin.h"
-#include "advi3pp.h"
 #include "MarlinConfig.h" //1.1.8-MG
+#include "advi3pp.h"
 
 #if ENABLED(ULTRA_LCD)
 
@@ -185,9 +185,9 @@
 
   #if ENABLED(LCD_SET_PROGRESS_MANUALLY) && (ENABLED(LCD_PROGRESS_BAR) || ENABLED(DOGLCD))
     extern uint8_t progress_bar_percent;
+  #endif
 
-#elif ENABLED(I3PLUS_LCD)
-
+#elif ENABLED(I3PLUS_LCD) // i3 Plus touchscreen LCD
   inline void lcd_update() { advi3pp::LCD::update(); }
   inline void lcd_init() { advi3pp::LCD::init(); }
   inline bool lcd_hasstatus() { return advi3pp::LCD::has_status(); }
@@ -199,7 +199,6 @@
   inline void lcd_reset_alert_level() { advi3pp::LCD::reset_alert_level(); }
   inline bool lcd_detected() { return advi3pp::LCD::detected(); }
   inline void lcd_refresh() { advi3pp::LCD::refresh(); }
-  #endif
 
 #else // no LCD
 

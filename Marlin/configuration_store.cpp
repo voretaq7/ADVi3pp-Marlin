@@ -1397,10 +1397,6 @@ void MarlinSettings::reset() {
 
   advi3pp::Printer::reset_presets();
   
-  #if ENABLED(ENABLE_LEVELING_FADE_HEIGHT)
-    planner.z_fade_height = 0.0;
-  #endif
-
   #if HAS_HOME_OFFSET
     ZERO(home_offset);
   #endif
