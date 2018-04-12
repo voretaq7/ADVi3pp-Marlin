@@ -24,7 +24,7 @@
  */
 #include "advi3pp.h"
 #include "advi3pp_utils.h"
-#include "advi3pp_impl.h"
+#include "advi3pp_.h"
 
 namespace advi3pp { inline namespace internals {
 
@@ -55,6 +55,12 @@ Log& Log::operator<<(uint8_t data)
 }
 
 Log& Log::operator<<(uint16_t data)
+{
+    Serial.print(data);
+    return log();
+}
+
+Log& Log::operator<<(uint32_t data)
 {
     Serial.print(data);
     return log();
@@ -107,10 +113,10 @@ void __assert(const char *msg, const char *file, uint16_t line)
 //! Construct a fixed-size string from a string and a size
 //! @param str      The string
 //! @param size     The size
-FixedSizeString::FixedSizeString(const String& str, size_t size)
+FixedSizeString::FixedSizeString(const String& str, size_t size, bool center)
 {
     if(str.length() <= size)
-		assign(str.c_str(), size);
+		assign(str.c_str(), size, center);
     else
         string_ = str.substring(0, size);
 }
@@ -118,20 +124,30 @@ FixedSizeString::FixedSizeString(const String& str, size_t size)
 //! Construct a fixed-size string from a duration and a size
 //! @param duration     The duration
 //! @param size         The size
-FixedSizeString::FixedSizeString(duration_t duration, size_t size)
+FixedSizeString::FixedSizeString(duration_t duration, size_t size, bool center)
 {
     char buffer[21 + 1]; // 21, from the doc
     duration.toString(buffer);
-	assign(buffer, size);
+	assign(buffer, size, center);
 }
 
 //! Assign a fixed-size string from a string and a size
 //! @param str      The string
 //! @param size     The size
-void FixedSizeString::assign(const char* str, size_t size)
+void FixedSizeString::assign(const String& str, size_t size, bool center)
 {
 	string_.reserve(size);
-	string_ = String{str};
+	string_ = "";
+
+	if(center)
+    {
+        size_t pad = (size - str.length()) / 2;
+	    for(size_t i = 0; i < pad; ++i)
+	        string_ += ' ';
+    }
+
+	string_ += str;
+
 	while(string_.length() < size)
 		string_ += ' ';
 }
@@ -139,24 +155,6 @@ void FixedSizeString::assign(const char* str, size_t size)
 // --------------------------------------------------------------------
 // String
 // --------------------------------------------------------------------
-
-//! Append a string of character to this String.
-//! @param value        The value to be append to this String
-//! @return             Itself
-String& operator<<(String& str, const char* value)
-{
-    str += value;
-    return str;
-}
-
-//! Append a decimal value to this String.
-//! @param value        The value to be append to this String
-//! @return             Itself
-String& operator<<(String& str, uint16_t value)
-{
-    str += value;
-    return str;
-}
 
 //! Append a Command to this String..
 //! @param command      The command to be append to this String (after transformation into a string)
@@ -209,7 +207,7 @@ Frame::Frame(Command command)
 //! @return         Itself
 Frame& operator<<(Frame& frame, const Uint8 &data)
 {
-    if(frame.position_ < frame.FRAME_BUFFER_SIZE)
+    if(frame.position_ < Frame::FRAME_BUFFER_SIZE)
     {
         frame.buffer_[frame.position_++] = data.byte;
         frame.buffer_[Frame::Position::Length] += 1;
@@ -225,11 +223,30 @@ Frame& operator<<(Frame& frame, const Uint8 &data)
 //! @return         Itself
 Frame& operator<<(Frame& frame, const Uint16 &data)
 {
-    if(frame.position_ < frame.FRAME_BUFFER_SIZE - 1)
+    if(frame.position_ < Frame::FRAME_BUFFER_SIZE - 1)
     {
         frame.buffer_[frame.position_++] = highByte(data.word);
         frame.buffer_[frame.position_++] = lowByte(data.word);
         frame.buffer_[Frame::Position::Length] += 2;
+    }
+    else
+        Log::error() << F("Data truncated") << Log::endl();
+    return frame;
+}
+
+//! Append a dword to this Frame.
+//! @param frame    The frame
+//! @param data     DWord to be appended
+//! @return         Itself
+Frame& operator<<(Frame& frame, const Uint32 &data)
+{
+    if(frame.position_ < Frame::FRAME_BUFFER_SIZE - 3)
+    {
+        frame.buffer_[frame.position_++] = static_cast<uint8_t>(data.dword >> 24);
+        frame.buffer_[frame.position_++] = static_cast<uint8_t>(data.dword >> 16);
+        frame.buffer_[frame.position_++] = static_cast<uint8_t>(data.dword >> 8);
+        frame.buffer_[frame.position_++] = static_cast<uint8_t>(data.dword & 0xFF);
+        frame.buffer_[Frame::Position::Length] += 4;
     }
     else
         Log::error() << F("Data truncated") << Log::endl();
@@ -281,7 +298,7 @@ Frame& operator<<(Frame& frame, const FixedSizeString& data)
 //! @return         Itself
 Frame& operator<<(Frame& frame, const String& data)
 {
-    size_t length = frame.position_ + data.length() < frame.FRAME_BUFFER_SIZE ? data.length() : frame.FRAME_BUFFER_SIZE - frame.position_;
+    size_t length = frame.position_ + data.length() < Frame::FRAME_BUFFER_SIZE ? data.length() : Frame::FRAME_BUFFER_SIZE - frame.position_;
     memcpy(frame.buffer_ + frame.position_, data.c_str(), length);
     frame.position_ += length;
     frame.buffer_[Frame::Position::Length] += length;
@@ -290,14 +307,15 @@ Frame& operator<<(Frame& frame, const String& data)
 
 //! Send htis Frame to the LCD display.
 //! @param logging  Enable logging in DEBUG release
-void Frame::send(bool logging)
+bool Frame::send(bool logging)
 {
     if(logging)
     {
         Log::log() << F(">>> ") << get_length() << F(" bytes, cmd = ") << static_cast<uint8_t>(get_command()) << Log::endl();
         Log::dump(buffer_, get_length() + 3);
     }
-    Serial2.write(buffer_, 3 + buffer_[Position::Length]); // Header, length and data
+    size_t size = 3 + buffer_[Position::Length];
+    return Serial2.write(buffer_, size) == size; // Header, length and data
 }
 
 //! Reset this Frame as an input Frame
@@ -318,7 +336,7 @@ void Frame::reset(Command command)
 }
 
 //! Wait for the given amount of bytes from the LCD display.
-//! @param length       Number of bvtes to be available before returning
+//! @param length       Number of bytes to be available before returning
 void Frame::wait_for_data(uint8_t length)
 {
     while (Serial2.available() < length)
@@ -334,7 +352,7 @@ bool Frame::available(uint8_t bytes)
 }
 
 //! Receive data from the LCD display.
-bool Frame::receive()
+bool Frame::receive(bool log)
 {
     // Format of the frame:
     // header | length | command | data
@@ -344,9 +362,10 @@ bool Frame::receive()
 
     wait_for_data(3);
 
-    if(Serial2.read() != HEADER_BYTE_0 || Serial2.read() != HEADER_BYTE_1)
+	uint8_t header0 = Serial2.read(), header1 = Serial2.read();
+    if(header0 != HEADER_BYTE_0 || header1 != HEADER_BYTE_1)
     {
-        Log::error() << F("Invalid header when receiving a Frame") << Log::endl();
+        Log::error() << F("Invalid header when receiving a Frame: ") << header0 << ", " << header1 << Log::endl();
         return false;
     }
 
@@ -369,8 +388,11 @@ bool Frame::receive()
         return false;
     }
 
-    Log::log() << F("<<< ") << length << F(" bytes.") << Log::endl();
-    Log::dump(buffer_, length + 3);
+    if(log)
+    {
+        Log::log() << F("<<< ") << length << F(" bytes.") << Log::endl();
+        Log::dump(buffer_, length + 3);
+    }
 
     position_ = Position::Command;
     return true;
@@ -427,6 +449,24 @@ Frame& operator>>(Frame& frame, Uint16& data)
     Uint8 msb, lsb;
     frame >> msb >> lsb;
     data.word = lsb.byte + 256 * msb.byte;
+    return frame;
+}
+
+//! Extract the next dword from this input Frame.
+//! @param frame    The Frame
+//! @param data     Next dword extracted from this Frame
+//! @return         Itself
+Frame& operator>>(Frame& frame, Uint32& data)
+{
+    if(frame.position_ >= 3 + frame.get_length() - 3)
+    {
+        Log::log() << F("Try to read a word after the end of data") << Log::endl();
+        return frame;
+    }
+
+    Uint8 b0, b1, b2, b3;
+    frame >> b0 >> b1 >> b2 >> b3;
+    data.dword = (((static_cast<uint32_t>(b0.byte) * 256 + b0.byte) * 256 + b1.byte) * 256 + b2.byte) * 256 + b3.byte;
     return frame;
 }
 
@@ -500,9 +540,9 @@ uint8_t ReadRegisterDataRequest::get_nb_bytes() const
     return buffer_[Position::NbBytes];
 }
 
-bool ReadRegisterDataResponse::receive(Register reg, uint8_t nb_bytes)
+bool ReadRegisterDataResponse::receive(Register reg, uint8_t nb_bytes, bool log)
 {
-    if(!Frame::receive())
+    if(!Frame::receive(log))
         return false;
 
     Command command; Register frame_reg; Uint8 frame_nb_bytes;
@@ -526,10 +566,23 @@ bool ReadRegisterDataResponse::receive(Register reg, uint8_t nb_bytes)
     return true;
 }
 
-bool ReadRegisterDataResponse::receive(const ReadRegisterDataRequest& request)
+bool ReadRegisterDataResponse::receive(const ReadRegisterDataRequest& request, bool log)
 {
-    return receive(request.get_register(), request.get_nb_bytes());
+    return receive(request.get_register(), request.get_nb_bytes(), log);
 }
+
+ReadRegister::ReadRegister(Register reg, uint8_t nb_bytes)
+: request{reg, nb_bytes}
+{
+}
+
+bool ReadRegister::send_and_receive(bool log)
+{
+    if(!request.send(log))
+        return false;
+    return receive(request, log);
+}
+
 
 WriteRamDataRequest::WriteRamDataRequest(Variable var)
 : Frame{Command::WriteRamData}
@@ -546,12 +599,16 @@ void WriteRamDataRequest::reset(Variable var)
 ReadRamDataRequest::ReadRamDataRequest(Variable var, uint8_t nb_words)
 : Frame{Command::ReadRamData}
 {
-    *this << var << Uint8{nb_words};
+    auto h = static_cast<uint8_t>(static_cast<uint16_t>(var) / 256);
+    auto l = static_cast<uint8_t>(static_cast<uint16_t>(var) % 256);
+    *this << Uint8{h} << Uint8{l} << Uint8{nb_words};
 }
 
 Variable ReadRamDataRequest::get_variable() const
 {
-    return static_cast<Variable>(buffer_[Position::Variable] * 256 + buffer_[Position::Variable + 1]);
+    auto h = buffer_[Position::Variable];
+    auto l = buffer_[Position::Variable + 1];
+    return static_cast<Variable>(h * 256 + l);
 }
 
 uint8_t ReadRamDataRequest::get_nb_words() const
@@ -595,6 +652,19 @@ bool ReadRamDataResponse::receive(const ReadRamDataRequest& request)
 {
     return receive(request.get_variable(), request.get_nb_words());
 }
+
+ReadRamData::ReadRamData(Variable var, uint8_t nb_words)
+: request{var, nb_words}
+{
+}
+
+bool ReadRamData::send_and_receive()
+{
+    if(!request.send())
+        return false;
+    return receive(request);
+}
+
 
 WriteCurveDataRequest::WriteCurveDataRequest(uint8_t channels)
 : Frame{Command::WriteCurveData}

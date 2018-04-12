@@ -262,6 +262,11 @@
 #include "gcode.h"
 #include "advi3pp.h"
 
+// This is only to ensure that CLion is parsing code properly inside the IDE
+#ifdef __CLION_IDE__
+#define HAS_BED_PROBE 1
+#endif
+
 #if HAS_ABL
   #include "vector_3.h"
   #if ENABLED(AUTO_BED_LEVELING_LINEAR)
@@ -2209,7 +2214,7 @@ static void clean_up_after_endstop_or_probe_move() {
    *
    * @return The raw Z position where the probe was triggered
    */
-  static float run_z_probe() {
+  float run_z_probe() {
 
     #if ENABLED(DEBUG_LEVELING_FEATURE)
       if (DEBUGGING(LEVELING)) DEBUG_POS(">>> run_z_probe", current_position);
@@ -2909,6 +2914,13 @@ static void do_homing_move(const AxisEnum axis, const float distance, const floa
 #define HOMEAXIS(LETTER) homeaxis(LETTER##_AXIS)
 
 static void homeaxis(const AxisEnum axis) {
+
+  #if MB(I3_PLUS)
+  /* fix for extruder stepper noise on the X_MIN switch.
+   * See: https://github.com/andrivet/ADVi3pp-Marlin/commit/5da26d65fd23c923a3d7c16d39c7518396392a60*/
+  if (axis == X_AXIS)
+    disable_e_steppers();
+  #endif
 
   #if IS_SCARA
     // Only Z homing (with probe) is permitted
@@ -4973,6 +4985,9 @@ void home_all_axes() { gcode_G28(true); }
 
         measured_z = 0;
 
+        const int nb_measures = PR_OUTER_END * PR_INNER_END;
+        int measure_index = 0;
+
         // Outer loop is Y with PROBE_Y_FIRST disabled
         for (uint8_t PR_OUTER_VAR = 0; PR_OUTER_VAR < PR_OUTER_END && !isnan(measured_z); PR_OUTER_VAR++) {
 
@@ -5009,6 +5024,9 @@ void home_all_axes() { gcode_G28(true); }
               if (!position_is_reachable_by_probe(xProbe, yProbe)) continue;
             #endif
 
+            lcd_status_printf_P(0, PSTR("Measure %i/%i @ (%i, %i) mm"),
+                                ++measure_index, nb_measures,
+                                static_cast<int>(xProbe), static_cast<int>(yProbe));
             measured_z = faux ? 0.001 * random(-100, 101) : probe_pt(xProbe, yProbe, stow_probe_after_each, verbose_level);
 
             if (isnan(measured_z)) {
@@ -5304,6 +5322,7 @@ void home_all_axes() { gcode_G28(true); }
     #endif
 
     report_current_position();
+    advi3pp::Printer::g29_leveling_finished();
 
     KEEPALIVE_STATE(IN_HANDLER);
 
@@ -7596,7 +7615,7 @@ inline void gcode_M104() {
     #endif
 
     if (parser.value_celsius() > thermalManager.degHotend(target_extruder))
-      lcd_status_printf_P(0, PSTR("E%i %s"), target_extruder + 1, MSG_HEATING);
+      lcd_status_printf_P(0, PSTR("Extruder %i %s"), target_extruder + 1, MSG_HEATING);
   }
 
   #if ENABLED(AUTOTEMP)
@@ -7753,7 +7772,7 @@ inline void gcode_M109() {
         print_job_timer.start();
     #endif
 
-    if (thermalManager.isHeatingHotend(target_extruder)) lcd_status_printf_P(0, PSTR("E%i %s"), target_extruder + 1, MSG_HEATING);
+    if (thermalManager.isHeatingHotend(target_extruder)) lcd_status_printf_P(0, PSTR("Extruder %i %s"), target_extruder + 1, MSG_HEATING);
   }
   else return;
 
@@ -11593,6 +11612,9 @@ void process_parsed_command() {
 
   // Handle a known G, M, or T
   switch (parser.command_letter) {
+    case 'I': // Process command specific to i3++
+        advi3pp::Printer::process_command(parser);
+        break;
     case 'G': switch (parser.codenum) {
 
       // G0, G1

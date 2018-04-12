@@ -26,7 +26,12 @@
 #include "Marlin.h"
 #include "cardreader.h"
 #include "advi3pp.h"
-#include "advi3pp_impl.h"
+#include "advi3pp_.h"
+
+namespace
+{
+    const uint8_t BUZZ_ON_PRESS_DURATION = 10; // x 1 ms
+}
 
 namespace advi3pp {
 
@@ -34,7 +39,7 @@ namespace advi3pp {
 // LCD
 // --------------------------------------------------------------------
 
-namespace { LCDImpl lcd; }
+namespace { LCD_ lcd; }
 
 void LCD::update()
 {
@@ -93,51 +98,79 @@ void LCD::queue_message(const String &message)
 
 void LCD::reset_message()
 {
-    lcd.reset_messaage();
+    lcd.reset_message();
+}
+
+void LCD::set_status(const __FlashStringHelper* fmt, ...)
+{
+    va_list args;
+    va_start(args, fmt);
+    lcd.set_status(fmt, args);
+    va_end(args);
+}
+
+void LCD::enable_buzzer(bool enable)
+{
+   lcd.enable_buzzer(enable);
+}
+
+void LCD::enable_buzz_on_press(bool enable)
+{
+    lcd.enable_buzz_on_press(enable);
+}
+
+void LCD::buzz(long duration, uint16_t frequency)
+{
+    lcd.buzz(duration, frequency);
+}
+
+void LCD::buzz_on_press()
+{
+    lcd.buzz_on_press();
 }
 
 // --------------------------------------------------------------------
-// LCDImpl
+// LCD Implementation
 // --------------------------------------------------------------------
 
-LCDImpl& LCDImpl::instance()
+LCD_& LCD_::instance()
 {
     return lcd;
 }
 
-void LCDImpl::update()
+void LCD_::update()
 {
     /* Do nothing */
 }
 
-void LCDImpl::init()
+void LCD_::init()
 {
     /* Do nothing */
 }
 
-bool LCDImpl::has_status()
+bool LCD_::has_status()
 {
     return message_.length() > 0;
 }
 
-void LCDImpl::set_status(const char* message)
+void LCD_::set_status(const char* message)
 {
 	Log::log() << F("STATUS: ") << message << Log::endl();
     message_ = message;
 }
 
-void LCDImpl::set_status_PGM(const char* message)
+void LCD_::set_status_PGM(const char* message)
 {
     message_ = String{reinterpret_cast<const __FlashStringHelper*>(message)};
     Log::log() << F("STATUS PGM: ") << message_ << Log::endl();
 }
 
-void LCDImpl::set_alert_status_PGM(const char* message)
+void LCD_::set_alert_status_PGM(const char* message)
 {
     set_status_PGM(message);
 }
 
-void LCDImpl::status_printf_P(const char * fmt, va_list args)
+void LCD_::status_printf_P(const char * fmt, va_list args)
 {
     static const size_t MAX_SIZE = 100;
     static char buffer[MAX_SIZE + 1];
@@ -147,50 +180,60 @@ void LCDImpl::status_printf_P(const char * fmt, va_list args)
     Log::log() << F("STATUS V: ") << message_ << Log::endl();
 }
 
-void LCDImpl::buttons_update()
+void LCD_::set_status(const __FlashStringHelper* fmt, va_list args)
+{
+    static const size_t MAX_SIZE = 100;
+    static char buffer[MAX_SIZE + 1];
+
+    vsnprintf_P(buffer, MAX_SIZE, reinterpret_cast<const char*>(fmt), args);
+    message_ = String{buffer};
+    Log::log() << F("STATUS V: ") << message_ << Log::endl();
+}
+
+void LCD_::buttons_update()
 {
     /* Do nothing */
 }
 
-void LCDImpl::reset_alert_level()
+void LCD_::reset_alert_level()
 {
     /* Do nothing */
 }
 
-bool LCDImpl::detected()
+bool LCD_::detected()
 {
     return true;
 }
 
-void LCDImpl::refresh()
+void LCD_::refresh()
 {
     /* Do nothing */
 }
 
-const String& LCDImpl::get_message() const
+const String& LCD_::get_message() const
 {
 	return message_;
 }
 
-void LCDImpl::queue_message(const String &message)
+void LCD_::queue_message(const String &message)
 {
     String msg{F("M117 ")}; msg << message;
     enqueue_and_echo_command(msg.c_str());
 }
 
-void LCDImpl::reset_messaage()
+void LCD_::reset_message()
 {
      enqueue_and_echo_commands_P(PSTR("M117"));
 }
 
-void LCDImpl::set_progress_name(const String& name)
+void LCD_::set_progress_name(const String& name)
 {
     progress_name_ = name;
     progress_percent_ = "";
     percent_ = -1;
 }
 
-const String& LCDImpl::get_progress() const
+const String& LCD_::get_progress() const
 {
     if(progress_name_.length() <= 0)
         return progress_name_; // i.e. empty
@@ -204,11 +247,50 @@ const String& LCDImpl::get_progress() const
     return progress_percent_;
 }
 
-void LCDImpl::reset_progress()
+void LCD_::reset_progress()
 {
     progress_name_ = "";
     progress_percent_ = "";
     percent_ = -1;
+}
+
+void LCD_::enable_buzzer(bool enable)
+{
+    buzzer_enabled_ = enable;
+}
+
+void LCD_::enable_buzz_on_press(bool enable)
+{
+    buzz_on_press_enabled_ = enable;
+    if(enable)
+        buzz_(50);
+}
+
+//! Activate the LCD internal buzzer for the given duration.
+//! Note: The buzzer is not able to produce different frequencies so the 2nd parameter is ignored.
+void LCD_::buzz(long duration, uint16_t)
+{
+    if(!buzzer_enabled_)
+        return;
+
+    buzz_(duration);
+}
+
+void LCD_::buzz_(long duration)
+{
+    duration /= 10;
+
+    WriteRegisterDataRequest request{Register::BuzzerBeepingTime};
+    request << Uint8(static_cast<uint8_t>(duration > UINT8_MAX ? UINT8_MAX : duration));
+    request.send();
+}
+
+
+void LCD_::buzz_on_press()
+{
+    if(!buzz_on_press_enabled_)
+        return;
+    buzz_(BUZZ_ON_PRESS_DURATION);
 }
 
 }

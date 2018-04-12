@@ -29,7 +29,10 @@
 #include <stdarg.h>
 
 class MarlinSettings;
+class GCodeParser;
 class String;
+class __FlashStringHelper;
+
 using eeprom_write = void (*)(int &pos, const uint8_t* value, uint16_t size, uint16_t* crc);
 using eeprom_read  = void (*)(int &pos, uint8_t* value, uint16_t size, uint16_t* crc);
 
@@ -41,7 +44,7 @@ enum class Page: uint8_t
     Boot                    = 1,
     Main                    = 22,
     Controls                = 24,
-    Calibration             = 26,
+    Tuning                  = 26,
     Settings                = 28,
     LoadUnload              = 30,
     Load2                   = 32,
@@ -51,11 +54,10 @@ enum class Page: uint8_t
     SdCard                  = 40,
     SdPrint                 = 42,
     UsbPrint                = 44,
-    Leveling1               = 46,
-    Leveling2               = 48,
-    ExtruderCalibration1    = 50,
-    ExtruderCalibration2    = 52,
-    ExtruderCalibration3    = 54,
+    Waiting                 = 46,
+    ManualLeveling          = 48,
+    ExtruderTuningTemp      = 50,
+    ExtruderTuningMeasure   = 54,
     XYZMotorsCalibration    = 56,
     PidTuning1              = 58,
     PidTuning2              = 60,
@@ -63,7 +65,7 @@ enum class Page: uint8_t
     PidSettings             = 64,
     FactoryReset            = 66,
     Statistics              = 68,
-    About                   = 70,
+    Versions                = 70,
     StepsSettings           = 72,
     FeedrateSettings        = 74,
     AccelerationSettings    = 76,
@@ -71,7 +73,17 @@ enum class Page: uint8_t
     PrintSettings           = 80,
     ThermalRunawayError     = 82,
     Mismatch                = 84,
-    Temperature             = 86
+    Temperature             = 86,
+    Infos                   = 88,
+    Firmware                = 90,
+    NoSensor                = 92,
+    SensorSettings          = 94,
+    LCD                     = 96,
+    Copyrights              = 98,
+    SensorTuning            = 100,
+    SensorGrid              = 102,
+    FilamentChange          = 104,
+    ZHeightTuning           = 106
 };
 
 //! The Duplicator i3 Plus printer.
@@ -80,11 +92,14 @@ struct Printer
     static void setup();
     static void task();
     static void auto_pid_finished();
+    static void g29_leveling_finished();
     static void store_presets(eeprom_write write, int& eeprom_index, uint16_t& working_crc);
     static void restore_presets(eeprom_read read, int& eeprom_index, uint16_t& working_crc);
     static void reset_presets();
-    static void temperature_error();
-    static void send_temperatures_data();
+    static void temperature_error(const __FlashStringHelper* message);
+    static void update();
+    static bool is_thermal_protection_enabled();
+    static void process_command(const GCodeParser& parser);
 };
 
 //! The Duplicator i3 Plus LCD Screen
@@ -94,7 +109,8 @@ struct LCD
     static void init();
     static bool has_status();
     static void set_status(const char* message, bool persist);
-    static void set_status_PGM(const char* message, int8_t level);
+    static void set_status_PGM(const char* message, int8_t level = 0);
+    static void set_status(const __FlashStringHelper* fmt, ...);
     static void set_alert_status_PGM(const char* message);
     static void buttons_update();
     static void reset_alert_level();
@@ -102,6 +118,10 @@ struct LCD
     static void refresh();
     static void queue_message(const String& message);
     static void reset_message();
+    static void enable_buzzer(bool enable);
+    static void enable_buzz_on_press(bool enable);
+    static void buzz(long duration, uint16_t frequency);
+    static void buzz_on_press();
 };
 
 }

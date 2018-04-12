@@ -269,8 +269,8 @@ uint8_t Temperature::soft_pwm_amount[HOTENDS],
     #endif
 
     #if ENABLED(PIDTEMP)
-      #define _TOP_HOTEND HOTENDS - 1
-    #else
+      #define _TOP_HOTEND (HOTENDS - 1)
+#else
       #define _TOP_HOTEND -1
     #endif
     #if ENABLED(PIDTEMPBED)
@@ -425,13 +425,15 @@ uint8_t Temperature::soft_pwm_amount[HOTENDS],
       if (ELAPSED(ms, next_temp_ms)) {
         #if HAS_TEMP_HOTEND || HAS_TEMP_BED
           print_heaterstates();
-          advi3pp::Printer::send_temperatures_data();
+          advi3pp::Printer::update();
         SERIAL_EOL();
         #endif
 
         next_temp_ms = ms + 2000UL;
 
         #if WATCH_THE_BED || WATCH_HOTENDS
+        if(advi3pp::Printer::is_thermal_protection_enabled())
+        {
           if (!heated && input > next_watch_temp) {
             if (input > watch_temp_target) heated = true;
             next_watch_temp = input + watch_temp_increase;
@@ -441,6 +443,7 @@ uint8_t Temperature::soft_pwm_amount[HOTENDS],
             _temp_error(hotend, PSTR(MSG_T_HEATING_FAILED), PSTR(MSG_HEATING_FAILED_LCD));
           else if (heated && input < temp - MAX_OVERSHOOT_PID_AUTOTUNE)
             _temp_error(hotend, PSTR(MSG_T_THERMAL_RUNAWAY), PSTR(MSG_THERMAL_RUNAWAY));
+        }
         #endif
       } // every 2 seconds
       // Timeout after 20 minutes since the last undershoot/overshoot cycle
@@ -549,7 +552,7 @@ int Temperature::getHeaterPower(int heater) {
 //
 void Temperature::_temp_error(const int8_t e, const char * const serial_msg, const char * const lcd_msg) {
   static bool killed = false;
-  advi3pp::Printer::temperature_error();
+  advi3pp::Printer::temperature_error(reinterpret_cast<const __FlashStringHelper*>(lcd_msg));
   if (IsRunning()) {
     SERIAL_ERROR_START();
     serialprintPGM(serial_msg);
@@ -568,6 +571,8 @@ void Temperature::_temp_error(const int8_t e, const char * const serial_msg, con
 }
 
 void Temperature::max_temp_error(const int8_t e) {
+  if(!advi3pp::Printer::is_thermal_protection_enabled())
+    return;
   #if HAS_TEMP_BED
     _temp_error(e, PSTR(MSG_T_MAXTEMP), e >= 0 ? PSTR(MSG_ERR_MAXTEMP) : PSTR(MSG_ERR_MAXTEMP_BED));
   #else
@@ -578,6 +583,8 @@ void Temperature::max_temp_error(const int8_t e) {
   #endif
 }
 void Temperature::min_temp_error(const int8_t e) {
+  if(!advi3pp::Printer::is_thermal_protection_enabled())
+    return;
   #if HAS_TEMP_BED
     _temp_error(e, PSTR(MSG_T_MINTEMP), e >= 0 ? PSTR(MSG_ERR_MINTEMP) : PSTR(MSG_ERR_MINTEMP_BED));
   #else
@@ -763,13 +770,18 @@ void Temperature::manage_heater() {
     #endif
 
     #if ENABLED(THERMAL_PROTECTION_HOTENDS)
+    if(advi3pp::Printer::is_thermal_protection_enabled())
+    {
       // Check for thermal runaway
       thermal_runaway_protection(&thermal_runaway_state_machine[e], &thermal_runaway_timer[e], current_temperature[e], target_temperature[e], e, THERMAL_PROTECTION_PERIOD, THERMAL_PROTECTION_HYSTERESIS);
+    }
     #endif
 
     soft_pwm_amount[e] = (current_temperature[e] > minttemp[e] || is_preheating(e)) && current_temperature[e] < maxttemp[e] ? (int)get_pid_output(e) >> 1 : 0;
 
     #if WATCH_HOTENDS
+    if(advi3pp::Printer::is_thermal_protection_enabled())
+    {
       // Make sure temperature is increasing
       if (watch_heater_next_ms[e] && ELAPSED(ms, watch_heater_next_ms[e])) { // Time to check this extruder?
         if (degHotend(e) < watch_target_temp[e])                             // Failed to increase enough?
@@ -777,6 +789,7 @@ void Temperature::manage_heater() {
         else                                                                 // Start again if the target is still far off
           start_watching_heater(e);
       }
+    }
     #endif
 
     #if ENABLED(TEMP_SENSOR_1_AS_REDUNDANT)
@@ -808,6 +821,8 @@ void Temperature::manage_heater() {
   #endif // FILAMENT_WIDTH_SENSOR
 
   #if WATCH_THE_BED
+  if(advi3pp::Printer::is_thermal_protection_enabled())
+  {
     // Make sure temperature is increasing
     if (watch_bed_next_ms && ELAPSED(ms, watch_bed_next_ms)) {        // Time to check the bed?
       if (degBed() < watch_target_bed_temp)                           // Failed to increase enough?
@@ -815,6 +830,7 @@ void Temperature::manage_heater() {
       else                                                            // Start again if the target is still far off
         start_watching_bed();
     }
+  }
   #endif // WATCH_THE_BED
 
   #if DISABLED(PIDTEMPBED)
@@ -830,7 +846,10 @@ void Temperature::manage_heater() {
     #endif
 
     #if HAS_THERMALLY_PROTECTED_BED
+    if(advi3pp::Printer::is_thermal_protection_enabled())
+    {
       thermal_runaway_protection(&thermal_runaway_bed_state_machine, &thermal_runaway_bed_timer, current_temperature_bed, target_temperature_bed, -1, THERMAL_PROTECTION_BED_PERIOD, THERMAL_PROTECTION_BED_HYSTERESIS);
+    }
     #endif
 
     #if HEATER_IDLE_HANDLER
@@ -1094,7 +1113,7 @@ void Temperature::init() {
   #endif // HEATER_0_USES_MAX6675
 
   #ifdef DIDR2
-    #define ANALOG_SELECT(pin) do{ if (pin < 8) SBI(DIDR0, pin); else SBI(DIDR2, pin - 8); }while(0)
+    #define ANALOG_SELECT(pin) do{ if ((pin) < 8) SBI(DIDR0, pin); else SBI(DIDR2, pin - 8); }while(0)
   #else
     #define ANALOG_SELECT(pin) do{ SBI(DIDR0, pin); }while(0)
   #endif
@@ -1318,6 +1337,9 @@ void Temperature::init() {
   void Temperature::thermal_runaway_protection(Temperature::TRState * const state, millis_t * const timer, const float current, const float target, const int8_t heater_id, const uint16_t period_seconds, const uint16_t hysteresis_degc) {
 
     static float tr_target_temperature[HOTENDS + 1] = { 0.0 };
+
+    if(!advi3pp::Printer::is_thermal_protection_enabled())
+      return;
 
     /**
         SERIAL_ECHO_START();
@@ -2115,17 +2137,21 @@ void Temperature::isr() {
           target_temperature[e]
         #endif
       ;
-      if (rawtemp > maxttemp_raw[e] * tdir && heater_on) max_temp_error(e);
-      if (rawtemp < minttemp_raw[e] * tdir && !is_preheating(e) && heater_on) {
+
+      if(advi3pp::Printer::is_thermal_protection_enabled())
+      {
+        if (rawtemp > maxttemp_raw[e] * tdir && heater_on) max_temp_error(e);
+        if (rawtemp < minttemp_raw[e] * tdir && !is_preheating(e) && heater_on) {
+          #ifdef MAX_CONSECUTIVE_LOW_TEMPERATURE_ERROR_ALLOWED
+            if (++consecutive_low_temperature_error[e] >= MAX_CONSECUTIVE_LOW_TEMPERATURE_ERROR_ALLOWED)
+          #endif
+              min_temp_error(e);
+        }
         #ifdef MAX_CONSECUTIVE_LOW_TEMPERATURE_ERROR_ALLOWED
-          if (++consecutive_low_temperature_error[e] >= MAX_CONSECUTIVE_LOW_TEMPERATURE_ERROR_ALLOWED)
+          else
+            consecutive_low_temperature_error[e] = 0;
         #endif
-            min_temp_error(e);
       }
-      #ifdef MAX_CONSECUTIVE_LOW_TEMPERATURE_ERROR_ALLOWED
-        else
-          consecutive_low_temperature_error[e] = 0;
-      #endif
     }
 
     #if HAS_TEMP_BED
@@ -2141,8 +2167,12 @@ void Temperature::isr() {
           target_temperature_bed
         #endif
       ;
-      if (current_temperature_bed_raw GEBED bed_maxttemp_raw && bed_on) max_temp_error(-1);
-      if (bed_minttemp_raw GEBED current_temperature_bed_raw && bed_on) min_temp_error(-1);
+
+      if(advi3pp::Printer::is_thermal_protection_enabled())
+      {
+        if (current_temperature_bed_raw GEBED bed_maxttemp_raw && bed_on) max_temp_error(-1);
+        if (bed_minttemp_raw GEBED current_temperature_bed_raw && bed_on) min_temp_error(-1);
+      }
     #endif
 
   } // temp_count >= OVERSAMPLENR

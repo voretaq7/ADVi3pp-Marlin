@@ -145,3 +145,7 @@ CMakeListsPrivate.txt
 cmake-build-*
 .pioenvs
 .piolibdeps
+ArduinoCore
+
+.python-version
+Marlin/BLTouch-Debug
