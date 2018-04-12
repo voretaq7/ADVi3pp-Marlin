@@ -354,10 +354,15 @@
 
   // If you are using a pre-configured hotend then you can use one of the value sets by uncommenting it
 
+  // Wanhao Duplicator i3 Plus w/ Micro-Swiss all-metal hotend & slotted block
+  #define  DEFAULT_Kp 25.49
+  #define  DEFAULT_Ki 1.60
+  #define  DEFAULT_Kd 101.26
+
   // Wanhao Duplicator i3 Plus
-  #define  DEFAULT_Kp 33.41
-  #define  DEFAULT_Ki 1.47
-  #define  DEFAULT_Kd 189.27
+  //#define  DEFAULT_Kp 33.41
+  //#define  DEFAULT_Ki 1.47
+  //#define  DEFAULT_Kd 189.27
 
   // Ultimaker
   //#define  DEFAULT_Kp 22.2
@@ -402,11 +407,16 @@
 
   //#define PID_BED_DEBUG // Sends debug data to the serial port.
 
+  // Wanhao i3 plus standard aluminum bed
+  #define DEFAULT_bedKp 411.28
+  #define DEFAULT_bedKi 80.98
+  #define DEFAULT_bedKd 522.22
+
   //120V 250W silicone heater into 4mm borosilicate (MendelMax 1.5+)
   //from FOPDT model - kp=.39 Tp=405 Tdead=66, Tc set to 79.2, aggressive factor of .15 (vs .1, 1, 10)
-  #define  DEFAULT_bedKp 10.00
-  #define  DEFAULT_bedKi .023
-  #define  DEFAULT_bedKd 305.4
+  //#define  DEFAULT_bedKp 10.00
+  //#define  DEFAULT_bedKi .023
+  //#define  DEFAULT_bedKd 305.4
 
   //120V 250W silicone heater into 4mm borosilicate (MendelMax 1.5+)
   //from pidautotune
@@ -1669,12 +1679,12 @@
 // @section extras
 
 // Increase the FAN PWM frequency. Removes the PWM noise but increases heating in the FET/Arduino
-#define FAST_PWM_FAN
+//#define FAST_PWM_FAN
 
 // Use software PWM to drive the fan, as for the heaters. This uses a very low frequency
 // which is not as annoying as with the hardware PWM. On the other hand, if this frequency
 // is too low, you should also increment SOFT_PWM_SCALE.
-//#define FAN_SOFT_PWM
+#define FAN_SOFT_PWM
 
 // Incrementing this by 1 will double the software PWM frequency,
 // affecting heaters, and the fan if FAN_SOFT_PWM is enabled.
