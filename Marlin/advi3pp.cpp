@@ -42,17 +42,17 @@
 
 namespace
 {
-    const uint16_t advi3_pp_version = 0x300;
+    const uint16_t advi3_pp_version = 0x301;
     const uint16_t advi3_pp_oldest_lcd_compatible_version = 0x300;
-    const uint16_t advi3_pp_newest_lcd_compatible_version = 0x300;
+    const uint16_t advi3_pp_newest_lcd_compatible_version = 0x301;
     // Modify also DETAILED_BUILD_VERSION in Version.h
 
-    const unsigned long advi3_pp_baudrate = 250000; // Between the LCD panel and the mainboard
+    const unsigned long advi3_pp_baudrate = 115200; // Between the LCD panel and the mainboard
     const uint16_t nb_visible_sd_files = 5;
 	const uint8_t  nb_visible_sd_file_chars = 48;
-    const uint16_t calibration_cube_size = 20; // 20 mm
-    const uint16_t calibration_extruder_filament = 100; // 10 cm
-	const uint16_t calibration_extruder_delta = 20; // 2 cm
+    const uint16_t tuning_cube_size = 20; // 20 mm
+    const uint16_t tuning_extruder_filament = 100; // 10 cm
+	const uint16_t tuning_extruder_delta = 20; // 2 cm
 
     const uint32_t usb_baudrates[] = {9600, 19200, 38400, 57600, 115200, 230400, 250000};
 
@@ -60,8 +60,6 @@ namespace
     const uint8_t BRIGHTNESS_MAX = 0x40;
     const uint8_t DIMMING_RATIO = 25; // in percent
     const uint16_t DIMMING_DELAY = 1 * 60;
-
-    const uint16_t EXTRUDER_TUNING_LENGTH = 100;
 }
 
 #ifdef ADVi3PP_BLTOUCH
@@ -96,16 +94,16 @@ void Printer::auto_pid_finished()
     printer.auto_pid_finished();
 }
 
-void Printer::g29_leveling_finished()
+void Printer::g29_leveling_finished(bool success)
 {
-    printer.g29_leveling_finished();
+    printer.g29_leveling_finished(success);
 }
 
 //! Store presets in permanent memory.
 //! @param write Function to use for the actual writing
 //! @param eeprom_index
 //! @param working_crc
-void Printer::store_presets(eeprom_write write, int& eeprom_index, uint16_t& working_crc)
+void Printer::store_eeprom_data(eeprom_write write, int& eeprom_index, uint16_t& working_crc)
 {
     printer.store_eeprom_data(write, eeprom_index, working_crc);
 }
@@ -114,15 +112,26 @@ void Printer::store_presets(eeprom_write write, int& eeprom_index, uint16_t& wor
 //! @param read Function to use for the actual reading
 //! @param eeprom_index
 //! @param working_crc
-void Printer::restore_presets(eeprom_read read, int& eeprom_index, uint16_t& working_crc)
+void Printer::restore_eeprom_data(eeprom_read read, int& eeprom_index, uint16_t& working_crc)
 {
     printer.restore_eeprom_data(read, eeprom_index, working_crc);
 }
 
 //! Reset presets.
-void Printer::reset_presets()
+void Printer::reset_eeprom_data()
 {
     printer.reset_eeprom_data();
+}
+
+//! Inform the user that the EEPROM data are not compatible and have been reset
+void Printer::eeprom_settings_mismatch()
+{
+    printer.eeprom_settings_mismatch();
+}
+
+void Printer::save_settings()
+{
+    printer.save_settings();
 }
 
 //! Called when a temperature error occurred and display the error on the LCD.
@@ -146,44 +155,42 @@ void Printer::process_command(const GCodeParser& parser)
     printer.process_command(parser);
 }
 
+LCD_& LCD_::instance()
+{
+    return printer.lcd_;
+}
+
 // --------------------------------------------------------------------
 // PrinterImpl
 // --------------------------------------------------------------------
 
 Printer_::Printer_()
-: task_{*this, pages_}, sd_files_{pages_}, preheat_{pages_}, sensor_{pages_}
+: pages_{*this}, lcd_{pages_}, task_{*this, pages_}, sd_files_{pages_}, preheat_{pages_}, sensor_{pages_}, pause_{pages_}
 {
 }
 
 //! Initialize the printer and its LCD
 void Printer_::setup()
 {
-#ifdef DEBUG
-    Log::log() << F("This is a DEBUG build") << Log::endl();
-#endif
-
-#ifdef ADVi3PP_BLTOUCH
-	 Log::log() << F("This is a BLTouch build") << Log::endl();
-#endif
+    init_ = true;
 
     if(usb_baudrate_ != BAUDRATE)
         change_usb_baudrate();
 
-    send_gplv3_7b_notice(); // You are not authorized to remove or alter this notice
     Serial2.begin(advi3_pp_baudrate);
-    get_advi3pp_lcd_version();
-    send_versions();
-    graphs_.clear();
-    dimming_.reset();
-
-    show_boot_page();
 }
 
 void Printer_::show_boot_page()
 {
+    if(eeprom_mismatch_)
+    {
+        pages_.show_page(Page::EEPROMMismatch);
+        return;
+    }
+
     if(!is_lcd_version_valid())
     {
-        pages_.show_page(Page::Mismatch, false);
+        pages_.show_page(Page::VersionsMismatch, false);
         return;
     }
 
@@ -197,6 +204,11 @@ void Printer_::show_boot_page()
 void Printer_::send_gplv3_7b_notice()
 {
     Log::log() << F("Based on ADVi3++, Copyright (C) 2017 Sebastien Andrivet") << Log::endl();
+}
+
+void Printer_::send_sponsors()
+{
+    Log::log() << F("Sponsored by Johnathan Chamberlain") << Log::endl();
 }
 
 //! Process command specific to this printer (I)
@@ -218,10 +230,8 @@ void Printer_::store_eeprom_data(eeprom_write write, int& eeprom_index, uint16_t
     EepromWrite eeprom{write, eeprom_index, working_crc};
 
     preheat_.store_eeprom_data(eeprom);
-    uint16_t dummy = 0; eeprom.write(dummy);
     eeprom.write(features_);
     eeprom.write(usb_baudrate_);
-
     dimming_.store_eeprom_data(eeprom);
 }
 
@@ -234,15 +244,11 @@ void Printer_::restore_eeprom_data(eeprom_read read, int& eeprom_index, uint16_t
     EepromRead eeprom{read, eeprom_index, working_crc};
 
     preheat_.restore_eeprom_data(eeprom);
-    uint16_t dummy = 0; eeprom.read(dummy);
     eeprom.read(features_);
     eeprom.read(usb_baudrate_);
-
-    Log::log() << F("Features: ") << static_cast<uint16_t>(features_) << Log::endl();
-
     dimming_.restore_eeprom_data(eeprom);
-    dimming_.enable(test_one_bit(features_, Feature::Dimming));
 
+    dimming_.enable(test_one_bit(features_, Feature::Dimming));
     LCD::enable_buzzer(test_one_bit(features_, Feature::Buzzer));
     LCD::enable_buzz_on_press(test_one_bit(features_, Feature::BuzzOnPress));
 }
@@ -252,17 +258,42 @@ void Printer_::reset_eeprom_data()
 {
     preheat_.reset_eeprom_data();
     features_ = DEFAULT_FEATURES;
+    usb_baudrate_ = DEFAULT_USB_BAUDRATE;
     dimming_.reset_eeprom_data();
+}
+
+//! Inform the user that the EEPROM data are not compatible and have been reset
+void Printer_::eeprom_settings_mismatch()
+{
+    // It is not possible to show the Mismatch page now since nothing is yet initialized.
+    // It will be done in the setup method.
+    eeprom_mismatch_ = true;
 }
 
 void Printer_::save_settings()
 {
+    eeprom_mismatch_ = false;
     enqueue_and_echo_commands_P(PSTR("M500"));
 }
 
 bool Printer_::is_thermal_protection_enabled() const
 {
     return test_one_bit(features_, Feature::ThermalProtection);
+}
+
+void Printer_::eeprom_mimatch(KeyValue key_value)
+{
+    switch(key_value)
+    {
+        case KeyValue::Continue:        eeprom_mimatch_continue(); break;
+        default:                        Log::error() << F("Invalid key value ") << static_cast<uint16_t>(key_value) << Log::endl(); break;
+    }
+}
+
+void Printer_::eeprom_mimatch_continue()
+{
+    save_settings();
+    pages_.show_page(Page::Main, false);
 }
 
 namespace
@@ -279,6 +310,11 @@ namespace
 // Pages management
 // ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
+PagesManager::PagesManager(Printer_& printer)
+: printer_{printer}
+{
+}
+
 //! Show the given page on the LCD screen
 //! @param [in] page The page to be displayed on the LCD screen
 void PagesManager::show_page(Page page, bool save_back)
@@ -293,10 +329,67 @@ void PagesManager::show_page(Page page, bool save_back)
     frame.send(true);
 }
 
-void PagesManager::show_waiting_page(const __FlashStringHelper* message)
+void PagesManager::show_wait_page(const __FlashStringHelper* message, bool save_back)
 {
     LCD::set_status_PGM(reinterpret_cast<const char*>(message));
-    show_page(Page::Waiting, true);
+    show_page(Page::Waiting, save_back);
+}
+
+void PagesManager::show_wait_back_page(const __FlashStringHelper* message, WaitCalllback back, bool save_back)
+{
+    LCD::set_status_PGM(reinterpret_cast<const char*>(message));
+    back_ = back;
+    show_page(Page::WaitBack, save_back);
+}
+
+void PagesManager::show_wait_back_continue_page(const __FlashStringHelper* message, WaitCalllback back, WaitCalllback cont, bool save_back)
+{
+    LCD::set_status_PGM(reinterpret_cast<const char*>(message));
+    back_ = back;
+    continue_ = cont;
+    show_page(Page::WaitBackContinue, save_back);
+}
+
+void PagesManager::show_wait_continue_page(const __FlashStringHelper* message, WaitCalllback cont, bool save_back)
+{
+    LCD::set_status_PGM(reinterpret_cast<const char*>(message));
+    back_ = nullptr;
+    continue_ = cont;
+    show_page(Page::WaitContinue, save_back);
+}
+
+void PagesManager::handle_lcd_command(KeyValue key_value)
+{
+    switch(key_value)
+    {
+        case KeyValue::Back:            handle_lcd_back(); break;
+        case KeyValue::Continue:        handle_lcd_continue(); break;
+        default:                        Log::error() << F("Invalid key value ") << static_cast<uint16_t>(key_value) << Log::endl(); break;
+    }
+}
+
+void PagesManager::handle_lcd_back()
+{
+    if(!back_)
+    {
+        Log::error() << F("No Back action defined") << Log::endl();
+        return;
+    }
+
+    back_();
+    back_ = nullptr;
+}
+
+void PagesManager::handle_lcd_continue()
+{
+    if(!continue_)
+    {
+        Log::error() << F("No Continue action defined") << Log::endl();
+        return;
+    }
+
+    continue_();
+    continue_ = nullptr;
 }
 
 //! Retrieve the current page on the LCD screen
@@ -363,9 +456,36 @@ void PagesManager::show_forward_page()
 // Incoming LCD commands and status update
 // ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
+//! Do not do soo many things in setup so do things here
+void Printer_::init()
+{
+    init_ = false;
+
+#ifdef DEBUG
+    Log::log() << F("This is a DEBUG build") << Log::endl();
+#endif
+
+#ifdef ADVi3PP_BLTOUCH
+    Log::log() << F("This is a BLTouch build") << Log::endl();
+#endif
+
+    send_gplv3_7b_notice(); // You are not authorized to remove or alter this notice
+    send_sponsors();
+
+    get_advi3pp_lcd_version();
+    send_versions();
+    graphs_.clear();
+    dimming_.reset();
+
+    show_boot_page();
+}
+
 //! Background tasks
 void Printer_::task()
 {
+    if(init_)
+        init();
+
     dimming_.check();
     read_lcd_serial();
     task_.execute_background_task();
@@ -379,9 +499,9 @@ bool Printer_::is_busy()
 }
 
 //! Update the status of the printer on the LCD.
-void Printer_::send_status_data()
+void Printer_::send_status_data(bool force_update)
 {
-    if(!task_.is_update_time())
+    if(!force_update && !task_.is_update_time())
         return;
 
     WriteRamDataRequest frame{Variable::TargetBed};
@@ -427,16 +547,16 @@ void Printer_::read_lcd_serial()
     switch(action)
     {
         case Action::Screen:                screen(key_value); break;
-        case Action::SdPrintCommand:        sd_print_command(key_value); break;
-        case Action::UsbPrintCommand:       usb_print_command(key_value); break;
+        case Action::PrintCommand:          print_command(key_value); break;
+        case Action::Wait:                  pages_.handle_lcd_command(key_value); break;
         case Action::LoadUnload:            load_unload(key_value); break;
         case Action::Preheat:               preheat(key_value); break;
         case Action::Move:                  move(key_value); break;
         case Action::SdCard:                sd_card(key_value); break;
         case Action::FactoryReset:          factory_reset(key_value); break;
         case Action::Leveling:              leveling(key_value); break;
-        case Action::ExtruderCalibration:   extruder_calibration(key_value); break;
-        case Action::XYZMotorsCalibration:  xyz_motors_calibration(key_value); break;
+        case Action::ExtruderTuning:        extruder_tuning(key_value); break;
+        case Action::XYZMotorsTuning:       xyz_motors_tuning(key_value); break;
         case Action::PidTuning:             pid_tuning(key_value); break;
         case Action::SensorSettings:        sensor_settings(key_value); break;
         case Action::NoSensor:              no_sensor(key_value); break;
@@ -456,6 +576,8 @@ void Printer_::read_lcd_serial()
         case Action::SensorGrid:            sensor_grid(key_value); break;
         case Action::SensorZHeight:         sensor_z_height(key_value); break;
         case Action::ChangeFilament:        change_filament(key_value); break;
+        case Action::EEPROMMismatch:        eeprom_mimatch(key_value); break;
+        case Action::Sponsors:              sponsors(key_value); break;
         case Action::MoveXPlus:             move_x_plus(); break;
         case Action::MoveXMinus:            move_x_minus(); break;
         case Action::MoveYPlus:             move_y_plus(); break;
@@ -498,23 +620,24 @@ void Printer_::show_temps()
         return;
     }
 
-    // If there is a SD card print running (or paused), display the SD print screen. Otherwise the USB Print page
-    pages_.show_page(card.isFileOpen() ? Page::SdPrint : Page::UsbPrint);
+    // If there is a print running (or paused), display the print screen.
+    pages_.show_page(Page::Print);
 }
 
-//! Show one of the Printing screens depending of the context: either the SD screen or the SD printing screen.
-//! Fallback to the USB printing if the SD card is not accessible.
+//! Show one of the Printing screens depending of the context:
+//! - If a print is running, display the Print screen
+//! - Otherwise, try to access the SD card. Depending of the result, display the SD card Page or the Temperatures page
 void Printer_::show_print()
 {
     // If there is a print running (or paused), display the SD or USB print screen
     if(print_job_timer.isRunning() || print_job_timer.isPaused())
     {
-        pages_.show_page(card.isFileOpen() ? Page::SdPrint : Page::UsbPrint);
+        pages_.show_page(Page::Print);
         return;
     }
 
-    pages_.show_waiting_page(F("Try to access the SD card..."));
-    task_.set_background_task(&Printer_::show_sd_or_temp_page);
+    pages_.show_wait_page(F("Try to access the SD card..."));
+    task_.set_background_task(BackgroundTask(this, &Printer_::show_sd_or_temp_page));
 }
 
 void Printer_::show_sd_or_temp_page()
@@ -684,9 +807,21 @@ void SDFilesManager::select_file(uint16_t file_index)
     card.startFileprint();
     print_job_timer.start();
 
-    Stepper::finish_and_disable(); // To circumvent homing problems
+    pages_.show_page(Page::Print);
+}
 
-    pages_.show_page(Page::SdPrint);
+// ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+// Printing commands (USB and SD)
+// ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+
+//! Handle print commands.
+//! @param key_value    The sub-action to handle
+void Printer_::print_command(KeyValue key_value)
+{
+    if(card.isFileOpen())
+        sd_print_command(key_value);
+    else
+        usb_print_command(key_value);
 }
 
 // ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
@@ -710,7 +845,7 @@ void Printer_::sd_print_command(KeyValue key_value)
 //! Stop SD printing
 void Printer_::sd_print_stop()
 {
-    Log::log() << F("Stop Print") << Log::endl();
+    Log::log() << F("Stop SD Print") << Log::endl();
 
     card.stopSDPrint();
     clear_command_queue();
@@ -720,7 +855,7 @@ void Printer_::sd_print_stop()
     fanSpeeds[0] = 0;
 
     pages_.show_back_page();
-    task_.set_background_task(&Printer_::reset_messages_task, 500);
+    task_.set_background_task(BackgroundTask(this, &Printer_::reset_messages_task), 500);
 }
 
 void Printer_::reset_messages_task()
@@ -784,7 +919,7 @@ void Printer_::usb_print_command(KeyValue key_value)
 //! Stop SD printing
 void Printer_::usb_print_stop()
 {
-    Log::log() << F("Stop Print") << Log::endl();
+    Log::log() << F("Stop USB Print") << Log::endl();
 
     LCD_::instance().reset_progress();
 
@@ -792,35 +927,35 @@ void Printer_::usb_print_stop()
     quickstop_stepper();
     print_job_timer.stop();
     Temperature::disable_all_heaters();
+    fanSpeeds[0] = 0;
+    SERIAL_ECHOLNPGM("//action:disconnect");
 
     pages_.show_back_page();
+    task_.set_background_task(BackgroundTask(this, &Printer_::reset_messages_task), 500);
 }
 
 //! Pause SD printing
 void Printer_::usb_print_pause()
 {
-    Log::log() << F("Pause Print") << Log::endl();
+    Log::log() << F("Pause USB Print") << Log::endl();
 
-    LCD::queue_message(F("Pause printing"));
+    LCD::queue_message(F("Pause printing..."));
 
     print_job_timer.pause();
 #if ENABLED(PARK_HEAD_ON_PAUSE)
     enqueue_and_echo_commands_P(PSTR("M125"));
 #endif
+
+    SERIAL_ECHOLNPGM("//action:pause");
 }
 
 //! Resume the current SD printing
 void Printer_::usb_print_resume()
 {
     Log::log() << F("Resume Print") << Log::endl();
-
     LCD::queue_message(F("Resume printing"));
-
-#if ENABLED(PARK_HEAD_ON_PAUSE)
     enqueue_and_echo_commands_P(PSTR("M24"));
-#else
-    print_job_timer.start();
-#endif
+    SERIAL_ECHOLNPGM("//action:resume");
 }
 
 //! Handle the Back button
@@ -891,10 +1026,14 @@ void Printer_::load_unload_start(bool load)
         return;
 
     Temperature::setTargetHotend(hotend, 0);
-    enqueue_and_echo_commands_P(PSTR("G91")); // relative mode
+    enqueue_and_echo_commands_P(PSTR("M83"));       // relative E mode
+    enqueue_and_echo_commands_P(PSTR("G92 E0"));    // reset E axis
 
-    task_.set_background_task(load ? &Printer_::load_filament_task : &Printer_::unload_filament_task);
-    pages_.show_page(load ? Page::Load2 : Page::Unload2);
+    task_.set_background_task(load
+        ? BackgroundTask(this, &Printer_::load_filament_start_task)
+        : BackgroundTask(this, &Printer_::unload_filament_start_task));
+    pages_.show_wait_back_page(F("Wait until the target temp is reached..."),
+        WaitCalllback(this, &Printer_::load_unload_stop));
 }
 
 //! Handle back from the Load on Unload LCD screen.
@@ -902,21 +1041,58 @@ void Printer_::load_unload_stop()
 {
     Log::log() << F("Load/Unload Stop");
 
-    task_.clear_background_task();
+    LCD::reset_message();
+    task_.set_background_task(BackgroundTask(this, &Printer_::load_unload_stop_task));
     clear_command_queue();
-    enqueue_and_echo_commands_P(PSTR("G90")); // absolute mode
     Temperature::setTargetHotend(0, 0);
 
     pages_.show_back_page();
+}
+
+void Printer_::load_unload_stop_task()
+{
+    if(is_busy() || !task_.has_background_task())
+        return;
+
+    task_.clear_background_task();
+    LCD::reset_message();
+    // Do this asynchronously to avoid race conditions
+    enqueue_and_echo_commands_P(PSTR("M82"));       // absolute E mode
+    enqueue_and_echo_commands_P(PSTR("G92 E0"));    // reset E axis
+
+}
+
+//! Load the filament if the temperature is high enough.
+void Printer_::load_filament_start_task()
+{
+    if(Temperature::current_temperature[0] >= Temperature::target_temperature[0] - 10)
+    {
+        Log::log() << F("Load Filament") << Log::endl();
+        LCD::buzz(100); // Inform the user that the extrusion starts
+        enqueue_and_echo_commands_P(PSTR("G1 E1 F120"));
+        task_.set_background_task(BackgroundTask(this, &Printer_::load_filament_task));
+        LCD::set_status(F("Wait until the filament comes out..."));
+    }
 }
 
 //! Load the filament if the temperature is high enough.
 void Printer_::load_filament_task()
 {
     if(Temperature::current_temperature[0] >= Temperature::target_temperature[0] - 10)
-    {
-        Log::log() << F("Load Filament") << Log::endl();
         enqueue_and_echo_commands_P(PSTR("G1 E1 F120"));
+}
+
+
+//! Unload the filament if the temperature is high enough.
+void Printer_::unload_filament_start_task()
+{
+    if(Temperature::current_temperature[0] >= Temperature::target_temperature[0] - 10)
+    {
+        Log::log() << F("Unload Filament") << Log::endl();
+        LCD::buzz(100); // Inform the user that the un-extrusion starts
+        enqueue_and_echo_commands_P(PSTR("G1 E-1 F120"));
+        task_.set_background_task(BackgroundTask(this, &Printer_::unload_filament_task));
+        LCD::set_status(F("Wait until the filament comes out..."));
     }
 }
 
@@ -924,12 +1100,8 @@ void Printer_::load_filament_task()
 void Printer_::unload_filament_task()
 {
     if(Temperature::current_temperature[0] >= Temperature::target_temperature[0] - 10)
-    {
-        Log::log() << F("Unload Filament") << Log::endl();
         enqueue_and_echo_commands_P(PSTR("G1 E-1 F120"));
-    }
 }
-
 
 // ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 // Preheat & Cooldown
@@ -991,57 +1163,51 @@ void Printer_::move_back()
 }
 
 //! Move the nozzle.
+void Printer_::move(const char* command, millis_t delay)
+{
+    if(!ELAPSED(millis(), last_move_time_ + delay))
+        return;
+    enqueue_and_echo_commands_P(PSTR("G91"));
+    enqueue_and_echo_commands_P(command);
+    enqueue_and_echo_commands_P(PSTR("G90"));
+    last_move_time_ = millis();
+}
+
+
+//! Move the nozzle.
 void Printer_::move_x_plus()
 {
-    clear_command_queue();
-    enqueue_and_echo_commands_P(PSTR("G91"));
-    enqueue_and_echo_commands_P(PSTR("G1 X5 F3000"));
-    enqueue_and_echo_commands_P(PSTR("G90"));
+    move(PSTR("G1 X4 F1000"), 150);
 }
 
 //! Move the nozzle.
 void Printer_::move_x_minus()
 {
-    clear_command_queue();
-    enqueue_and_echo_commands_P(PSTR("G91"));
-    enqueue_and_echo_commands_P(PSTR("G1 X-5 F3000"));
-    enqueue_and_echo_commands_P(PSTR("G90"));
+    move(PSTR("G1 X-4 F1000"), 150);
 }
 
 //! Move the nozzle.
 void Printer_::move_y_plus()
 {
-    clear_command_queue();
-    enqueue_and_echo_commands_P(PSTR("G91"));
-    enqueue_and_echo_commands_P(PSTR("G1 Y5 F3000"));
-    enqueue_and_echo_commands_P(PSTR("G90"));
+    move(PSTR("G1 Y4 F1000"), 150);
 }
 
 //! Move the nozzle.
 void Printer_::move_y_minus()
 {
-    clear_command_queue();
-    enqueue_and_echo_commands_P(PSTR("G91"));
-    enqueue_and_echo_commands_P(PSTR("G1 Y-5 F3000"));
-    enqueue_and_echo_commands_P(PSTR("G90"));
+    move(PSTR("G1 Y-4 F1000"), 150);
 }
 
 //! Move the nozzle.
 void Printer_::move_z_plus()
 {
-    clear_command_queue();
-    enqueue_and_echo_commands_P(PSTR("G91"));
-    enqueue_and_echo_commands_P(PSTR("G1 Z0.5 F3000"));
-    enqueue_and_echo_commands_P(PSTR("G90"));
+    move(PSTR("G1 Z0.5 F1000"), 10);
 }
 
 //! Move the nozzle.
 void Printer_::move_z_minus()
 {
-    clear_command_queue();
-    enqueue_and_echo_commands_P(PSTR("G91"));
-    enqueue_and_echo_commands_P(PSTR("G1 Z-0.5 F3000"));
-    enqueue_and_echo_commands_P(PSTR("G90"));
+    move(PSTR("G1 Z-0.5 F1000"), 10);
 }
 
 //! Extrude some filament.
@@ -1440,10 +1606,10 @@ void Printer_::jerk_settings_save()
     Uint16 x, y, z, e;
     response >> x >> y >> z >> e;
 
-    jerks_.max_jerk[X_AXIS] = static_cast<uint32_t>(x.word / 10);
-    jerks_.max_jerk[Y_AXIS] = static_cast<uint32_t>(y.word / 10);
-    jerks_.max_jerk[Z_AXIS] = static_cast<uint32_t>(z.word / 10);
-    jerks_.max_jerk[E_AXIS] = static_cast<uint32_t>(e.word / 10);
+    jerks_.max_jerk[X_AXIS] = x.word / 10.0;
+    jerks_.max_jerk[Y_AXIS] = y.word / 10.0;
+    jerks_.max_jerk[Z_AXIS] = z.word / 10.0;
+    jerks_.max_jerk[E_AXIS] = e.word / 10.0;
     jerks_.save();
 
     pages_.show_forward_page();
@@ -1575,6 +1741,10 @@ bool Printer_::is_lcd_version_valid() const
     return lcd_version_ >= advi3_pp_oldest_lcd_compatible_version && lcd_version_ <= advi3_pp_newest_lcd_compatible_version;
 }
 
+// ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+// Versions
+// ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+
 //! Display the Versions screen,
 void Printer_::versions(KeyValue key_value)
 {
@@ -1600,6 +1770,31 @@ void Printer_::versions_back()
 void Printer_::versions_show()
 {
     pages_.show_page(Page::Versions);
+}
+
+// ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+// Sponsors
+// ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+
+//! Display the Sponsors screen,
+void Printer_::sponsors(KeyValue key_value)
+{
+    switch(key_value)
+    {
+        case KeyValue::Show:					sponsors_show(); break;
+        case KeyValue::Back:                    sponsors_back(); break;
+        default:								Log::error() << F("Invalid key value ") << static_cast<uint16_t>(key_value) << Log::endl(); break;
+    }
+}
+
+void Printer_::sponsors_back()
+{
+    pages_.show_back_page();
+}
+
+void Printer_::sponsors_show()
+{
+    pages_.show_page(Page::Sponsors);
 }
 
 // ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
@@ -1703,12 +1898,12 @@ void Printer_::leveling(KeyValue key_value)
 //! Home the printer for bed leveling.
 void Printer_::leveling_home()
 {
-    pages_.show_waiting_page(F("Homing..."));
+    pages_.show_wait_page(F("Homing..."));
     axis_homed[X_AXIS] = axis_homed[Y_AXIS] = axis_homed[Z_AXIS] = false;
     axis_known_position[X_AXIS] = axis_known_position[Y_AXIS] = axis_known_position[Z_AXIS] = false;
     enqueue_and_echo_commands_P(PSTR("G90")); // absolute mode
     enqueue_and_echo_commands_P((PSTR("G28"))); // homing
-    task_.set_background_task(&Printer_::manual_leveling_task, 200);
+    task_.set_background_task(BackgroundTask(this, &Printer_::manual_leveling_task), 200);
 }
 
 //! Leveling Background task.
@@ -1777,23 +1972,23 @@ void Printer_::leveling_finish()
 }
 
 // ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
-// Extruder calibration
+// Extruder tuning
 // ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
-void Printer_::extruder_calibration(KeyValue key_value)
+void Printer_::extruder_tuning(KeyValue key_value)
 {
     switch(key_value)
     {
-        case KeyValue::Show:                    show_extruder_calibration(); break;
-        case KeyValue::CalibrationStart:        start_extruder_calibration(); break;
-        case KeyValue::CalibrationSettings:     extruder_calibrartion_settings(); break;
-        case KeyValue::Back:                    cancel_extruder_calibration(); break;
-        default:                                Log::error() << F("Invalid key value ") << static_cast<uint16_t>(key_value) << Log::endl(); break;
+        case KeyValue::Show:            show_extruder_tuning(); break;
+        case KeyValue::TuningStart:     start_extruder_tuning(); break;
+        case KeyValue::TuningSettings:  extruder_calibrartion_settings(); break;
+        case KeyValue::Back:            cancel_extruder_tuning(); break;
+        default:                        Log::error() << F("Invalid key value ") << static_cast<uint16_t>(key_value) << Log::endl(); break;
     }
 }
 
-//! Show the extruder calibration screen.
-void Printer_::show_extruder_calibration()
+//! Show the extruder tuning screen.
+void Printer_::show_extruder_tuning()
 {
     set_target_temperature(200);
 
@@ -1805,21 +2000,21 @@ void Printer_::show_extruder_calibration()
     pages_.show_page(Page::ExtruderTuningTemp);
 }
 
-//! Start extruder calibration.
-void Printer_::start_extruder_calibration()
+//! Start extruder tuning.
+void Printer_::start_extruder_tuning()
 {
     auto hotend = get_target_temperature();
     if(hotend <= 0)
         return;
 
-    pages_.show_waiting_page(F("Heating the extruder..."));
+    pages_.show_wait_page(F("Heating the extruder..."));
     Temperature::setTargetHotend(hotend, 0);
 
-    task_.set_background_task(&Printer_::extruder_calibration_heating_task);
+    task_.set_background_task(BackgroundTask(this, &Printer_::extruder_tuning_heating_task));
 }
 
-//! Extruder calibration background task.
-void Printer_::extruder_calibration_heating_task()
+//! Extruder tuning background task.
+void Printer_::extruder_tuning_heating_task()
 {
     if(Temperature::current_temperature[0] < Temperature::target_temperature[0] - 10)
         return;
@@ -1830,16 +2025,16 @@ void Printer_::extruder_calibration_heating_task()
     enqueue_and_echo_commands_P(PSTR("M83"));           // relative E mode
     enqueue_and_echo_commands_P(PSTR("G92 E0"));        // reset E axis
 
-    String command; command << F("G1 E") << EXTRUDER_TUNING_LENGTH << " F50"; // Extrude slowly
+    String command; command << F("G1 E") << tuning_extruder_filament << " F50"; // Extrude slowly
     enqueue_and_echo_command(command.c_str());
 
-    task_.set_background_task(&Printer_::extruder_calibration_extruding_task);
+    task_.set_background_task(BackgroundTask(this, &Printer_::extruder_tuning_extruding_task));
 }
 
-//! Extruder calibration background task.
-void Printer_::extruder_calibration_extruding_task()
+//! Extruder tuning background task.
+void Printer_::extruder_tuning_extruding_task()
 {
-    if(current_position[E_AXIS] < EXTRUDER_TUNING_LENGTH || is_busy())
+    if(current_position[E_AXIS] < tuning_extruder_filament || is_busy())
         return;
     task_.clear_background_task();
 
@@ -1848,28 +2043,28 @@ void Printer_::extruder_calibration_extruding_task()
     Temperature::setTargetHotend(0, 0);
     task_.clear_background_task();
     LCD::reset_message();
-    extruder_calibration_finished();
+    extruder_tuning_finished();
 }
 
 //! Record the amount of filament extruded.
-void Printer_::extruder_calibration_finished()
+void Printer_::extruder_tuning_finished()
 {
     Log::log() << F("Filament extruded ") << extruded_ << Log::endl();
-    enqueue_and_echo_commands_P(PSTR("G82"));       // absolute E mode
+    enqueue_and_echo_commands_P(PSTR("M82"));       // absolute E mode
     enqueue_and_echo_commands_P(PSTR("G92 E0"));    // reset E axis
 
     task_.clear_background_task();
     pages_.show_page(Page::ExtruderTuningMeasure, false);
 }
 
-//! Cancel the extruder calibration.
-void Printer_::cancel_extruder_calibration()
+//! Cancel the extruder tuning.
+void Printer_::cancel_extruder_tuning()
 {
     task_.clear_background_task();
 
     Temperature::setTargetHotend(0, 0);
 
-    enqueue_and_echo_commands_P(PSTR("G82"));       // absolute E mode
+    enqueue_and_echo_commands_P(PSTR("M82"));       // absolute E mode
     enqueue_and_echo_commands_P(PSTR("G92 E0"));    // reset E axis
 
     pages_.show_back_page();
@@ -1894,39 +2089,39 @@ void Printer_::extruder_calibrartion_settings()
     steps_.axis_steps_per_mm[Y_AXIS] = Planner::axis_steps_per_mm[Y_AXIS];
     steps_.axis_steps_per_mm[Z_AXIS] = Planner::axis_steps_per_mm[Z_AXIS];
 	steps_.axis_steps_per_mm[E_AXIS] = Planner::axis_steps_per_mm[E_AXIS]
-                                       * extruded_ / (extruded_ + calibration_extruder_delta - e.word);
+                                       * extruded_ / (extruded_ + tuning_extruder_delta - e.word);
 
 	Log::log() << F("Adjust: old = ")
                << Planner::axis_steps_per_mm[E_AXIS]
                << F(", expected = ") << extruded_
-               << F(", measured = ") << (extruded_ + calibration_extruder_delta - e.word)
+               << F(", measured = ") << (extruded_ + tuning_extruder_delta - e.word)
                << F(", new = ") << steps_.axis_steps_per_mm[E_AXIS] << Log::endl();
 
     steps_settings_show(false);
 }
 
 // ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
-// XYZ Motors calibration
+// XYZ Motors tuning
 // ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
-void Printer_::xyz_motors_calibration(KeyValue key_value)
+void Printer_::xyz_motors_tuning(KeyValue key_value)
 {
     switch(key_value)
     {
-        case KeyValue::Show:                    show_xyz_motors_calibration(); break;
-        case KeyValue::CalibrationSettings:     xyz_motors_calibration_settings(); break;
-        case KeyValue::Back:                    cancel_xyz_motors_calibration(); break;
-        default:                                Log::error() << F("Invalid key value ") << static_cast<uint16_t>(key_value) << Log::endl(); break;
+        case KeyValue::Show:            show_xyz_motors_tuning(); break;
+        case KeyValue::TuningSettings:  xyz_motors_tuning_settings(); break;
+        case KeyValue::Back:            cancel_xyz_motors_tuning(); break;
+        default:                        Log::error() << F("Invalid key value ") << static_cast<uint16_t>(key_value) << Log::endl(); break;
     }
 }
 
-void Printer_::show_xyz_motors_calibration()
+void Printer_::show_xyz_motors_tuning()
 {
     WriteRamDataRequest frame{Variable::Value0};
     frame << 200_u16 << 200_u16 << 200_u16;
     frame.send();
     pages_.save_forward_page();
-    pages_.show_page(Page::XYZMotorsCalibration);
+    pages_.show_page(Page::XYZMotorsTuning);
 }
 
 float adjust_value(float old, double expected, double measured)
@@ -1936,7 +2131,7 @@ float adjust_value(float old, double expected, double measured)
     return new_value;
 };
 
-void Printer_::xyz_motors_calibration_settings()
+void Printer_::xyz_motors_tuning_settings()
 {
     ReadRamData response{Variable::Value0, 3};
     if(!response.send_and_receive())
@@ -1948,17 +2143,17 @@ void Printer_::xyz_motors_calibration_settings()
     Uint16 x, y, z;
     response >> x >> y >> z;
 
-    steps_.axis_steps_per_mm[X_AXIS] = adjust_value(Planner::axis_steps_per_mm[X_AXIS], calibration_cube_size * 10, x.word);
-    steps_.axis_steps_per_mm[Y_AXIS] = adjust_value(Planner::axis_steps_per_mm[Y_AXIS], calibration_cube_size * 10, y.word);
-    steps_.axis_steps_per_mm[Z_AXIS] = adjust_value(Planner::axis_steps_per_mm[Z_AXIS], calibration_cube_size * 10, z.word);
+    steps_.axis_steps_per_mm[X_AXIS] = adjust_value(Planner::axis_steps_per_mm[X_AXIS], tuning_cube_size * 10, x.word);
+    steps_.axis_steps_per_mm[Y_AXIS] = adjust_value(Planner::axis_steps_per_mm[Y_AXIS], tuning_cube_size * 10, y.word);
+    steps_.axis_steps_per_mm[Z_AXIS] = adjust_value(Planner::axis_steps_per_mm[Z_AXIS], tuning_cube_size * 10, z.word);
     // Fill all values because all 4 axis are displayed by  show_steps_settings
     steps_.axis_steps_per_mm[E_AXIS] = Planner::axis_steps_per_mm[E_AXIS];
 
     steps_settings_show(false);
 }
 
-//! Cancel the extruder calibration.
-void Printer_::cancel_xyz_motors_calibration()
+//! Cancel the extruder tuning.
+void Printer_::cancel_xyz_motors_tuning()
 {
     pages_.show_back_page();
 }
@@ -2043,7 +2238,7 @@ void Printer_::sensor_leveling()
 #ifdef ADVi3PP_BLTOUCH
     sensor_interactive_leveling_ = true;
     pages_.save_forward_page();
-    pages_.show_waiting_page(F("Homing..."));
+    pages_.show_wait_page(F("Homing..."));
     enqueue_and_echo_commands_P(PSTR("G28"));                   // homing
     enqueue_and_echo_commands_P(PSTR("G1 Z10 F240"));           // raise head
     enqueue_and_echo_commands_P(PSTR("G29 E"));                 // leveling
@@ -2053,14 +2248,39 @@ void Printer_::sensor_leveling()
 #endif
 }
 
-void Printer_::g29_leveling_finished()
+void Printer_::g29_leveling_finished(bool success)
 {
+    if(!success)
+    {
+        if(!sensor_interactive_leveling_ && !IS_SD_FILE_OPEN) // i.e. USB print
+            SERIAL_ECHOLNPGM("//action:disconnect"); // "disconnect" is the only standard command to stop an USB print
+
+        if(sensor_interactive_leveling_)
+		    pages_.show_wait_back_page(F("Leveling failed"), WaitCalllback(this, &Printer_::g29_leveling_failed), false);
+        else
+            LCD::set_status(F("Leveling failed"));
+
+        sensor_interactive_leveling_ = false;
+        return;
+    }
+
     LCD::reset_message();
+
     if(sensor_interactive_leveling_)
+	{
+		sensor_interactive_leveling_ = false;	
         sensor_grid_show();
+	}
     else
-        enqueue_and_echo_commands_P(PSTR("M420 S1"));   // set bed leveling state (enable)
-    sensor_interactive_leveling_ = false;
+    {
+        enqueue_and_echo_commands_P(PSTR("M500"));      // Save settings (including mash)
+        enqueue_and_echo_commands_P(PSTR("M420 S1"));   // Set bed leveling state (enable)
+    }
+}
+
+void Printer_::g29_leveling_failed()
+{
+    pages_.show_back_page();
 }
 
 // ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
@@ -2082,8 +2302,8 @@ void Printer_::sensor_grid_show()
 {
 #ifdef ADVi3PP_BLTOUCH
     WriteRamDataRequest frame{Variable::Value0};
-    for(auto x = 0; x < GRID_MAX_POINTS_X; x++)
-        for(auto y = 0; y < GRID_MAX_POINTS_Y; y++)
+    for(auto y = 0; y < GRID_MAX_POINTS_Y; y++)
+        for(auto x = 0; x < GRID_MAX_POINTS_X; x++)
             frame << Uint16(static_cast<int16_t>(z_values[x][y] * 1000));
     frame.send();
 
@@ -2098,7 +2318,8 @@ void Printer_::sensor_grid_cancel()
 
 void Printer_::sensor_grid_save()
 {
-    enqueue_and_echo_commands_P(PSTR("M420 S1"));   // set bed leveling state (enable)
+    enqueue_and_echo_commands_P(PSTR("M500"));      // Save settings (including mash)
+    enqueue_and_echo_commands_P(PSTR("M420 S1"));   // Set bed leveling state (enable)
     pages_.show_forward_page();
 }
 
@@ -2110,9 +2331,9 @@ void Printer_::sensor_z_height()
 {
 #ifdef ADVi3PP_BLTOUCH
     pages_.save_forward_page();
-    pages_.show_waiting_page(F("Homing..."));
+    pages_.show_wait_page(F("Homing..."));
     enqueue_and_echo_commands_P((PSTR("G28")));  // homing
-    task_.set_background_task(&Printer_::z_height_tuning_home_task, 200);
+    task_.set_background_task(BackgroundTask(this, &Printer_::z_height_tuning_home_task), 200);
 #else
     pages_.show_page(Page::NoSensor);
 #endif
@@ -2130,7 +2351,7 @@ void Printer_::z_height_tuning_home_task()
     enqueue_and_echo_commands_P(PSTR("G1 X100 Y100 F3000"));    // center of the bed
     enqueue_and_echo_commands_P(PSTR("G1 Z0 F240"));            // lower head
 
-    task_.set_background_task(&Printer_::z_height_tuning_center_task, 200);
+    task_.set_background_task(BackgroundTask(this, &Printer_::z_height_tuning_center_task), 200);
 }
 
 void Printer_::z_height_tuning_center_task()
@@ -2163,7 +2384,7 @@ void Printer_::sensor_z_height_cancel()
 
 void Printer_::sensor_z_height_continue()
 {
-    pages_.show_waiting_page(F("Measure Z-height"));
+    pages_.show_wait_page(F("Measure Z-height"));
     enqueue_and_echo_commands_P(PSTR("I0")); // measure z-height
 }
 
@@ -2234,7 +2455,6 @@ void Printer_::change_filament(KeyValue key_value)
 
 void Printer_::change_filament_show()
 {
-    pages_.show_page(Page::FilamentChange);
 }
 
 void Printer_::change_filament_continue()
@@ -2440,14 +2660,10 @@ void Printer_::send_stats()
 //! Display the Thermal Runaway Error screen.
 void Printer_::temperature_error(const __FlashStringHelper* message)
 {
-    String lcd_message{message};
-
-    WriteRamDataRequest frame{Variable::Message};
-    frame << lcd_message;
-    frame.send(true);
+    LCD::set_status(message);
+    send_status_data(true);
     pages_.show_page(advi3pp::Page::ThermalRunawayError);
 }
-
 
 // --------------------------------------------------------------------
 // PidSettings
@@ -2468,7 +2684,7 @@ void PidSettings::save()
     Temperature::Ki = Ki;
     Temperature::Kd = Kd;
 
-    Printer_::save_settings();
+    Printer::save_settings();
 }
 
 // --------------------------------------------------------------------
@@ -2492,7 +2708,7 @@ void StepSettings::save()
     Planner::axis_steps_per_mm[Z_AXIS] = axis_steps_per_mm[Z_AXIS];
     Planner::axis_steps_per_mm[E_AXIS] = axis_steps_per_mm[E_AXIS];
 
-    Printer_::save_settings();
+    Printer::save_settings();
 }
 
 // --------------------------------------------------------------------
@@ -2520,7 +2736,7 @@ void FeedrateSettings::save()
     Planner::min_feedrate_mm_s = min_feedrate_mm_s;
     Planner::min_travel_feedrate_mm_s = min_travel_feedrate_mm_s;
 
-    Printer_::save_settings();
+    Printer::save_settings();
 }
 
 // --------------------------------------------------------------------
@@ -2550,7 +2766,7 @@ void AccelerationSettings::save()
     Planner::retract_acceleration = retract_acceleration;
     Planner::travel_acceleration =  travel_acceleration;
 
-    Printer_::save_settings();
+    Printer::save_settings();
 }
 
 // --------------------------------------------------------------------
@@ -2574,7 +2790,7 @@ void JerkSettings::save()
     Planner::max_jerk[Z_AXIS] = max_jerk[Z_AXIS];
     Planner::max_jerk[E_AXIS] = max_jerk[E_AXIS];
 
-    Printer_::save_settings();
+    Printer::save_settings();
 }
 
 // --------------------------------------------------------------------
@@ -2716,6 +2932,7 @@ void Sensor::save_z_height(double height)
 {
     String command; command << F("M851 Z") << height;
     enqueue_and_echo_command(command.c_str());
+    Printer::save_settings();
 }
 
 void Sensor::self_test()
@@ -2828,7 +3045,7 @@ void Preheat::preset(uint16_t presetIndex)
     }
 
     if(hasChanged)
-        Printer_::save_settings();
+        Printer::save_settings();
 
     const Preset& preset = presets_[presetIndex];
 
@@ -2904,9 +3121,11 @@ bool Task::is_update_time()
 
 //! Set the next background task and its delay
 //! @param task     The next background task
-//! @param delta    Duration to be added to the current time to execute the background tast
+//! @param delta    Duration to be added to the current time to execute the background task
 void Task::set_background_task(BackgroundTask task, unsigned int delta)
 {
+    assert(!background_task_);
+
     op_time_delta_ = delta;
     background_task_ = task;
     next_op_time_ = millis() + delta;
@@ -2921,10 +3140,83 @@ void Task::clear_background_task()
 //! If there is an operating running, execute its next step
 void Task::execute_background_task()
 {
-    if(background_task_ == nullptr || !ELAPSED(millis(), next_op_time_))
+    if(!background_task_ || !ELAPSED(millis(), next_op_time_))
         return;
 
-    (printer_.*background_task_)();
+    next_op_time_ = millis() + op_time_delta_;
+    background_task_();
+}
+
+bool Task::has_background_task() const
+{
+    return bool(background_task_);
+}
+
+// --------------------------------------------------------------------
+// Advance pause
+// --------------------------------------------------------------------
+
+void Printer_::advanced_pause_show_message(const AdvancedPauseMessage message)
+{
+    pause_.advanced_pause_show_message(message);
+}
+
+AdvancedPause::AdvancedPause(PagesManager& pages)
+: pages_{pages}
+{
+}
+
+void AdvancedPause::advanced_pause_show_message(const AdvancedPauseMessage message)
+{
+    if(message == last_advanced_pause_message_)
+        return;
+    last_advanced_pause_message_ = message;
+
+    switch (message)
+    {
+        case ADVANCED_PAUSE_MESSAGE_INIT:                       init(); break;
+        case ADVANCED_PAUSE_MESSAGE_UNLOAD:                     advi3pp::LCD::set_status(F("Unloading filament...")); break;
+        case ADVANCED_PAUSE_MESSAGE_INSERT:                     insert_filament(); break;
+        case ADVANCED_PAUSE_MESSAGE_EXTRUDE:                    advi3pp::LCD::set_status(F("Extruding some filament...")); break;
+        case ADVANCED_PAUSE_MESSAGE_CLICK_TO_HEAT_NOZZLE:       advi3pp::LCD::set_status(F("Press continue to heat")); break;
+        case ADVANCED_PAUSE_MESSAGE_RESUME:                     advi3pp::LCD::set_status(F("Resuming print...")); break;
+        case ADVANCED_PAUSE_MESSAGE_STATUS:                     printing(); break;
+        case ADVANCED_PAUSE_MESSAGE_WAIT_FOR_NOZZLES_TO_HEAT:   advi3pp::LCD::set_status(F("Waiting for heat...")); break;
+        case ADVANCED_PAUSE_MESSAGE_OPTION:                     advanced_pause_menu_response = ADVANCED_PAUSE_RESPONSE_RESUME_PRINT; break;
+        default: advi3pp::Log::log() << F("Unknown AdvancedPauseMessage: ") << static_cast<uint16_t>(message) << advi3pp::Log::endl(); break;
+    }
+}
+
+void AdvancedPause::init()
+{
+    pages_.save_forward_page();
+    pages_.show_wait_page(F("Pausing..."));
+}
+
+void AdvancedPause::insert_filament()
+{
+    pages_.show_wait_continue_page(F("Insert filament and press continue..."),
+        WaitCalllback(this, &AdvancedPause::filament_inserted), false);
+}
+
+void AdvancedPause::filament_inserted()
+{
+    ::wait_for_user = false;
+    this->pages_.show_wait_page(F("Filament inserted.."), false);
+}
+
+void AdvancedPause::printing()
+{
+    advi3pp::LCD::set_status(F("Printing"));
+    pages_.show_forward_page();
 }
 
 }
+
+#if ENABLED(ADVANCED_PAUSE_FEATURE)
+
+void lcd_advanced_pause_show_message(const AdvancedPauseMessage message)
+{
+    advi3pp::printer.advanced_pause_show_message(message);
+}
+#endif // ADVANCED_PAUSE_FEATURE

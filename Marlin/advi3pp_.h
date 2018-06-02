@@ -29,6 +29,7 @@
 #include "advi3pp_enums.h"
 #include "advi3pp.h"
 #include "advi3pp_utils.h"
+#include "ADVcallback.h"
 
 namespace advi3pp { inline namespace internals {
 
@@ -41,7 +42,10 @@ static const Brightness DEFAULT_BRIGHTNESS = Brightness::Max;
 static const uint32_t DEFAULT_USB_BAUDRATE = BAUDRATE;
 
 class Printer_;
-using BackgroundTask = void (Printer_::*)();
+
+using andrivet::Callback;
+using BackgroundTask = Callback<void(*)()>;
+using WaitCalllback = Callback<void(*)()>;
 
 // --------------------------------------------------------------------
 // PagesManager
@@ -49,18 +53,29 @@ using BackgroundTask = void (Printer_::*)();
 
 struct PagesManager
 {
-    PagesManager() = default;
+    explicit PagesManager(Printer_& printer);
 
     void show_page(Page page, bool save_back = true);
-    void show_waiting_page(const __FlashStringHelper* message);
+    void show_wait_page(const __FlashStringHelper* message, bool save_back = true);
+    void show_wait_back_page(const __FlashStringHelper* message, WaitCalllback back, bool save_back = true);
+    void show_wait_back_continue_page(const __FlashStringHelper* message, WaitCalllback back, WaitCalllback cont, bool save_back = true);
+    void show_wait_continue_page(const __FlashStringHelper* message, WaitCalllback cont, bool save_back = true);
+    void handle_lcd_command(KeyValue key_value);
     Page get_current_page();
     void show_back_page();
     void save_forward_page();
     void show_forward_page();
 
 private:
+    void handle_lcd_back();
+    void handle_lcd_continue();
+
+private:
+    Printer_& printer_;
     Stack<Page, 8> back_pages_{};
     Page forward_page_ = Page::None;
+    WaitCalllback back_;
+    WaitCalllback continue_;
 };
 
 // --------------------------------------------------------------------
@@ -288,6 +303,7 @@ struct Task
     void set_background_task(BackgroundTask task, unsigned int delta = 500);
     void clear_background_task();
     void execute_background_task();
+    bool has_background_task() const;
     bool is_update_time();
 
 private:
@@ -299,7 +315,77 @@ private:
     unsigned int op_time_delta_ = 500;
     millis_t next_op_time_ = 0;
     millis_t next_update_time_ = 0;
-    BackgroundTask background_task_ = nullptr;
+    BackgroundTask background_task_;
+};
+
+// --------------------------------------------------------------------
+// Advanced Pause
+// --------------------------------------------------------------------
+
+struct AdvancedPause
+{
+    explicit AdvancedPause(PagesManager& pages);
+
+    void advanced_pause_show_message(AdvancedPauseMessage message);
+
+private:
+    void init();
+    void insert_filament();
+    void printing();
+    void filament_inserted();
+
+private:
+    PagesManager& pages_;
+    AdvancedPauseMessage last_advanced_pause_message_ = static_cast<AdvancedPauseMessage>(-1);
+};
+
+// --------------------------------------------------------------------
+// LCD implementation
+// --------------------------------------------------------------------
+
+//! Implementation of the Duplication i3 Plus LCD
+struct LCD_
+{
+    explicit LCD_(PagesManager& pages);
+
+    static LCD_& instance();
+
+    void update();
+    void init();
+    bool has_status();
+    void set_status(const char* message);
+    void set_status_PGM(const char* message);
+    void set_alert_status_PGM(const char* message);
+    void status_printf_P(const char* fmt, va_list argp);
+    void set_status(const __FlashStringHelper* fmt, va_list argp);
+    void buttons_update();
+    void reset_alert_level();
+    bool detected();
+    void refresh();
+    const String& get_message() const;
+    void queue_message(const String& message);
+    void reset_message();
+
+    void set_progress_name(const String& name);
+    const String& get_progress() const;
+    void reset_progress();
+
+    void enable_buzzer(bool enable);
+    void enable_buzz_on_press(bool enable);
+    void buzz(long duration, uint16_t frequency = 0);
+    void buzz_on_press();
+
+private:
+    void buzz_(long duration);
+
+private:
+    PagesManager& pages_;
+    String message_;
+    String progress_name_;
+    mutable String progress_percent_;
+    mutable int percent_ = -1;
+    bool buzzer_enabled_ = true;
+    bool buzz_on_press_enabled_ = false;
 };
 
 // --------------------------------------------------------------------
@@ -314,25 +400,31 @@ struct Printer_
     void setup();
     void task();
     void auto_pid_finished();
-    void g29_leveling_finished();
+    void g29_leveling_finished(bool success);
     void store_eeprom_data(eeprom_write write, int& eeprom_index, uint16_t& working_crc);
     void restore_eeprom_data(eeprom_read read, int& eeprom_index, uint16_t& working_crc);
     void reset_eeprom_data();
+    void eeprom_settings_mismatch();
     void temperature_error(const __FlashStringHelper* message);
     bool is_thermal_protection_enabled() const;
     void process_command(const GCodeParser& parser);
+    void advanced_pause_show_message(AdvancedPauseMessage message);
 
-    static void save_settings();
+    void save_settings();
 
 private:
-    void send_status_data();
+    void init();
+    void send_status_data(bool force_update = false);
     void send_gplv3_7b_notice(); // Forks: you have to keep this notice
+    void send_sponsors();
     void send_versions();
     void read_lcd_serial();
     void send_stats();
     void show_boot_page();
     void reset_messages_task();
     bool is_busy();
+
+    void g29_leveling_failed();;
 
     String get_lcd_firmware_version();
     void get_advi3pp_lcd_version();
@@ -345,6 +437,8 @@ private:
     void change_usb_baudrate();
 
     void icode_0(const GCodeParser& parser);
+
+    friend LCD_& LCD_::instance();
 
 private:
     // Actions
@@ -362,6 +456,8 @@ private:
 
     void back();
 
+    void print_command(KeyValue key_value);
+
     void sd_print_command(KeyValue key_value);
     void sd_print_stop();
     void sd_print_pause();
@@ -378,14 +474,18 @@ private:
     void load_unload_show();
     void load_unload_start(bool load);
     void load_unload_stop();
+    void load_filament_start_task();
     void load_filament_task();
+    void unload_filament_start_task();
     void unload_filament_task();
+    void load_unload_stop_task();
 
     void preheat(KeyValue key_value);
     void cooldown();
 
     void move(KeyValue key_value);
     void show_move();
+    void move(const char* command, millis_t delay);
     void move_x_plus();
     void move_x_minus();
     void move_x_home();
@@ -450,19 +550,19 @@ private:
     void leveling_finish();
     void manual_leveling_task();
 
-    void extruder_calibration(KeyValue key_value);
-    void show_extruder_calibration();
-    void start_extruder_calibration();
+    void extruder_tuning(KeyValue key_value);
+    void show_extruder_tuning();
+    void start_extruder_tuning();
     void extruder_calibrartion_settings();
-    void extruder_calibration_heating_task();
-    void extruder_calibration_extruding_task();
-    void extruder_calibration_finished();
-    void cancel_extruder_calibration();
+    void extruder_tuning_heating_task();
+    void extruder_tuning_extruding_task();
+    void extruder_tuning_finished();
+    void cancel_extruder_tuning();
 
-    void xyz_motors_calibration(KeyValue key_value);
-    void show_xyz_motors_calibration();
-    void cancel_xyz_motors_calibration();
-    void xyz_motors_calibration_settings();
+    void xyz_motors_tuning(KeyValue key_value);
+    void show_xyz_motors_tuning();
+    void cancel_xyz_motors_tuning();
+    void xyz_motors_tuning_settings();
 
     void sensor_settings(KeyValue key_value);
     void sensor_settings_show();
@@ -518,12 +618,20 @@ private:
     void versions_mismatch_forward();
     void versions_back();
 
+    void sponsors(KeyValue key_value);
+    void sponsors_show();
+    void sponsors_back();
+
     void copyrights(KeyValue key_value);
     void copyrights_show();
     void copyrights_back();
 
+    void eeprom_mimatch(KeyValue key_value);
+    void eeprom_mimatch_continue();
+
 private:
     PagesManager pages_;
+    LCD_ lcd_;
     Task task_;
     SDFilesManager sd_files_;
     Preheat preheat_;
@@ -539,54 +647,13 @@ private:
     Dimming dimming_{};
     Sensor sensor_;
     Graphs graphs_;
+    AdvancedPause pause_;
+
+    bool init_ = true;
     bool sensor_interactive_leveling_ = false;
     double extruded_ = 0.0;
-};
-
-// --------------------------------------------------------------------
-// LCD implementation
-// --------------------------------------------------------------------
-
-//! Implementation of the Duplication i3 Plus LCD
-struct LCD_
-{
-    static LCD_& instance();
-
-    void update();
-    void init();
-    bool has_status();
-    void set_status(const char* message);
-    void set_status_PGM(const char* message);
-    void set_alert_status_PGM(const char* message);
-    void status_printf_P(const char* fmt, va_list argp);
-    void set_status(const __FlashStringHelper* fmt, va_list argp);
-    void buttons_update();
-    void reset_alert_level();
-    bool detected();
-    void refresh();
-    const String& get_message() const;
-    void queue_message(const String& message);
-    void reset_message();
-
-    void set_progress_name(const String& name);
-    const String& get_progress() const;
-    void reset_progress();
-
-    void enable_buzzer(bool enable);
-    void enable_buzz_on_press(bool enable);
-    void buzz(long duration, uint16_t frequency = 0);
-    void buzz_on_press();
-
-private:
-    void buzz_(long duration);
-
-private:
-    String message_;
-    String progress_name_;
-    mutable String progress_percent_;
-    mutable int percent_ = -1;
-    bool buzzer_enabled_ = true;
-    bool buzz_on_press_enabled_ = false;
+    bool eeprom_mismatch_ = false;
+    millis_t last_move_time_ = 0;
 };
 
 }}

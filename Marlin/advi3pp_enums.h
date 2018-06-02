@@ -167,16 +167,16 @@ enum class Variable: uint16_t
 enum class Action: uint16_t
 {
     Screen                  = 0x0400,
-    SdPrintCommand          = 0x0401,
-    UsbPrintCommand         = 0x0402,
+    PrintCommand            = 0x0401,
+    Wait                    = 0x0402,
     LoadUnload              = 0x0403,
     Preheat                 = 0x0404,
     Move                    = 0x0405,
     SdCard                  = 0x0406,
     FactoryReset            = 0x0407,
     Leveling                = 0x0408,
-    ExtruderCalibration     = 0x0409,
-    XYZMotorsCalibration    = 0x040A,
+    ExtruderTuning          = 0x0409,
+    XYZMotorsTuning         = 0x040A,
     PidTuning               = 0x040B,
     SensorSettings          = 0x040C,
     Firmware                = 0x040D,
@@ -195,6 +195,8 @@ enum class Action: uint16_t
     SensorGrid              = 0x041A,
     SensorZHeight           = 0x041B,
     ChangeFilament          = 0x041C,
+    EEPROMMismatch          = 0x041D,
+    Sponsors                = 0x041E,
 
     MoveXMinus              = 0x0420,
     MoveXPlus               = 0x0421,
@@ -257,8 +259,8 @@ enum class KeyValue: uint16_t
     LevelingPoint4          = 0x0004,
     LevelingPoint5          = 0x0005,
 
-    CalibrationStart        = 0x0001,
-    CalibrationSettings     = 0x0002,
+    TuningStart             = 0x0001,
+    TuningSettings          = 0x0002,
 
     PidTuningStep1          = 0x0000,
     PidTuningStep2          = 0x0001,
@@ -292,7 +294,7 @@ enum class Feature: uint16_t
     ThermalProtection   = 0b0000000000000010,
     Dimming             = 0b0000000000000100,
     Buzzer              = 0b0000000000001000,
-    BuzzOnPress          = 0b0000000000010000
+    BuzzOnPress         = 0b0000000000010000
 };
 ENABLE_BITMASK_OPERATOR(Feature);
 

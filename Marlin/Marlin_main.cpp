@@ -2189,7 +2189,9 @@ static void clean_up_after_endstop_or_probe_move() {
 
     // Retract BLTouch immediately after a probe if it was triggered
     #if ENABLED(BLTOUCH)
-      if (probe_triggered && set_bltouch_deployed(false)) return true;
+      // Always stow the sensor, not only when the probe was triggered
+      // (otherwise, the sensor stays deployed in case of probing error)
+      if (set_bltouch_deployed(false)) return true;
     #endif
 
     // Clear endstop flags
@@ -5322,7 +5324,7 @@ void home_all_axes() { gcode_G28(true); }
     #endif
 
     report_current_position();
-    advi3pp::Printer::g29_leveling_finished();
+    advi3pp::Printer::g29_leveling_finished(!isnan(measured_z));
 
     KEEPALIVE_STATE(IN_HANDLER);
 
@@ -6477,7 +6479,7 @@ inline void gcode_M17() {
       HOTEND_LOOP() {
         if (thermalManager.degTargetHotend(e) && abs(thermalManager.degHotend(e) - thermalManager.degTargetHotend(e)) > TEMP_HYSTERESIS) {
           heaters_heating = true;
-          #if ENABLED(ULTIPANEL)
+          #if ENABLED(ULTIPANEL) || ENABLED(I3PLUS_LCD)
             lcd_advanced_pause_show_message(ADVANCED_PAUSE_MESSAGE_WAIT_FOR_NOZZLES_TO_HEAT);
           #endif
           break;
@@ -6535,7 +6537,7 @@ inline void gcode_M17() {
 
     // Show initial message and wait for synchronize steppers
     if (show_lcd) {
-      #if ENABLED(ULTIPANEL)
+      #if ENABLED(ULTIPANEL) || ENABLED(I3PLUS_LCD)
         lcd_advanced_pause_show_message(ADVANCED_PAUSE_MESSAGE_INIT);
       #endif
     }
@@ -6553,7 +6555,7 @@ inline void gcode_M17() {
 
     if (unload_length != 0) {
       if (show_lcd) {
-        #if ENABLED(ULTIPANEL)
+        #if ENABLED(ULTIPANEL) || ENABLED(I3PLUS_LCD)
           lcd_advanced_pause_show_message(ADVANCED_PAUSE_MESSAGE_UNLOAD);
           idle();
         #endif
@@ -6564,7 +6566,7 @@ inline void gcode_M17() {
     }
 
     if (show_lcd) {
-      #if ENABLED(ULTIPANEL)
+      #if ENABLED(ULTIPANEL) || ENABLED(I3PLUS_LCD)
         lcd_advanced_pause_show_message(ADVANCED_PAUSE_MESSAGE_INSERT);
       #endif
     }
@@ -6608,7 +6610,7 @@ inline void gcode_M17() {
           nozzle_timed_out |= thermalManager.is_heater_idle(e);
 
       if (nozzle_timed_out) {
-        #if ENABLED(ULTIPANEL)
+        #if ENABLED(ULTIPANEL) || ENABLED(I3PLUS_LCD)
           lcd_advanced_pause_show_message(ADVANCED_PAUSE_MESSAGE_CLICK_TO_HEAT_NOZZLE);
         #endif
 
@@ -6621,7 +6623,7 @@ inline void gcode_M17() {
         // Wait for the heaters to reach the target temperatures
         ensure_safe_temperature();
 
-        #if ENABLED(ULTIPANEL)
+        #if ENABLED(ULTIPANEL) || ENABLED(I3PLUS_LCD)
           lcd_advanced_pause_show_message(ADVANCED_PAUSE_MESSAGE_INSERT);
         #endif
 
@@ -6664,7 +6666,7 @@ inline void gcode_M17() {
     set_destination_from_current();
 
     if (load_length != 0) {
-      #if ENABLED(ULTIPANEL)
+      #if ENABLED(ULTIPANEL) || ENABLED(I3PLUS_LCD)
         // Show "insert filament"
         if (nozzle_timed_out)
           lcd_advanced_pause_show_message(ADVANCED_PAUSE_MESSAGE_INSERT);
@@ -6680,7 +6682,7 @@ inline void gcode_M17() {
       }
       KEEPALIVE_STATE(IN_HANDLER);
 
-      #if ENABLED(ULTIPANEL)
+      #if ENABLED(ULTIPANEL) || ENABLED(I3PLUS_LCD)
         // Show "load" message
         lcd_advanced_pause_show_message(ADVANCED_PAUSE_MESSAGE_LOAD);
       #endif
@@ -6689,7 +6691,7 @@ inline void gcode_M17() {
       do_pause_e_move(load_length, FILAMENT_CHANGE_LOAD_FEEDRATE);
     }
 
-    #if ENABLED(ULTIPANEL) && ADVANCED_PAUSE_EXTRUDE_LENGTH > 0
+    #if (ENABLED(ULTIPANEL) || ENABLED(I3PLUS_LCD)) && ADVANCED_PAUSE_EXTRUDE_LENGTH > 0
 
       if (!thermalManager.tooColdToExtrude(active_extruder)) {
         float extrude_length = initial_extrude_length;
@@ -6718,7 +6720,7 @@ inline void gcode_M17() {
 
     #endif
 
-    #if ENABLED(ULTIPANEL)
+    #if ENABLED(ULTIPANEL) || ENABLED(I3PLUS_LCD)
       // "Wait for print to resume"
       lcd_advanced_pause_show_message(ADVANCED_PAUSE_MESSAGE_RESUME);
     #endif
@@ -6735,7 +6737,7 @@ inline void gcode_M17() {
       filament_ran_out = false;
     #endif
 
-    #if ENABLED(ULTIPANEL)
+    #if ENABLED(ULTIPANEL) || ENABLED(I3PLUS_LCD)
       // Show status screen
       lcd_advanced_pause_show_message(ADVANCED_PAUSE_MESSAGE_STATUS);
     #endif
@@ -8465,6 +8467,7 @@ inline void gcode_M114() {
   static void cap_line(const char * const name, bool ena=false) {
     SERIAL_PROTOCOLPGM("Cap:");
     serialprintPGM(name);
+    SERIAL_PROTOCOLPGM(":");
     SERIAL_PROTOCOLLN(int(ena ? 1 : 0));
   }
 #endif
@@ -8561,6 +8564,13 @@ inline void gcode_M115() {
         , true
       #endif
     );
+
+    // THERMAL_PROTECTION
+    #if ENABLED(THERMAL_PROTECTION_HOTENDS) && ENABLED(THERMAL_PROTECTION_BED)
+    cap_line(PSTR("THERMAL_PROTECTION"), advi3pp::Printer::is_thermal_protection_enabled());
+    #else
+    cap_line(PSTR("THERMAL_PROTECTION"), false);
+    #endif
 
   #endif // EXTENDED_CAPABILITIES_REPORT
 }
