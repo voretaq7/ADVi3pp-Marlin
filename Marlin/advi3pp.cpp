@@ -42,10 +42,9 @@
 
 namespace
 {
-    const uint16_t advi3_pp_version = 0x301;
-    const uint16_t advi3_pp_oldest_lcd_compatible_version = 0x300;
-    const uint16_t advi3_pp_newest_lcd_compatible_version = 0x301;
-    // Modify also DETAILED_BUILD_VERSION in Version.h
+    const uint16_t advi3_pp_version = 0x302;
+    const uint16_t advi3_pp_oldest_lcd_compatible_version = 0x301;
+    const uint16_t advi3_pp_newest_lcd_compatible_version = 0x302;
 
     const unsigned long advi3_pp_baudrate = 115200; // Between the LCD panel and the mainboard
     const uint16_t nb_visible_sd_files = 5;
@@ -251,6 +250,8 @@ void Printer_::restore_eeprom_data(eeprom_read read, int& eeprom_index, uint16_t
     dimming_.enable(test_one_bit(features_, Feature::Dimming));
     LCD::enable_buzzer(test_one_bit(features_, Feature::Buzzer));
     LCD::enable_buzz_on_press(test_one_bit(features_, Feature::BuzzOnPress));
+
+    check_and_fix();
 }
 
 //! Reset presets.
@@ -2664,6 +2665,14 @@ void Printer_::temperature_error(const __FlashStringHelper* message)
     send_status_data(true);
     pages_.show_page(advi3pp::Page::ThermalRunawayError);
 }
+
+void Printer_::check_and_fix()
+{
+    if(Planner::max_jerk[X_AXIS] == 0) Planner::max_jerk[X_AXIS] = DEFAULT_XJERK;
+    if(Planner::max_jerk[Y_AXIS] == 0) Planner::max_jerk[Y_AXIS] = DEFAULT_YJERK;
+    if(Planner::max_jerk[Z_AXIS] == 0) Planner::max_jerk[Z_AXIS] = DEFAULT_ZJERK;
+}
+
 
 // --------------------------------------------------------------------
 // PidSettings
