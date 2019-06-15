@@ -402,7 +402,8 @@
 
   // If you are using a pre-configured hotend then you can use one of the value sets by uncommenting it
 
-  // @advi3++: Wanhao Duplicator i3 Plus default PID values
+  // @advi3++:  Wanhao Duplicator i3 Plus
+  //            w/ Micro-Swiss all-metal hotend & slotted block
   #define  DEFAULT_Kp 25.49
   #define  DEFAULT_Ki 1.60
   #define  DEFAULT_Kd 101.26
@@ -427,6 +428,7 @@
 //===========================================================================
 //============================= PID > Bed Temperature Control ===============
 //===========================================================================
+
 /**
  * PID Bed Heating
  *
@@ -872,13 +874,13 @@
 
 // Feedrate (mm/m) for the "accurate" probe of each point
 // @advi3++: Use a far slower speed for the second measure
-#define Z_PROBE_SPEED_SLOW (Z_PROBE_SPEED_FAST / 2)
+#define Z_PROBE_SPEED_SLOW (Z_PROBE_SPEED_FAST / 25)
 
 // The number of probes to perform at each point.
 //   Set to 2 for a fast/slow probe, using the second probe result.
 //   Set to 3 or more for slow probes, averaging the results.
 // @advi3++: Experimental - only one measure
-//#define MULTIPLE_PROBING 2
+#define MULTIPLE_PROBING 2
 
 /**
  * Z probes require clearance when deploying, stowing, and moving between
@@ -1104,9 +1106,9 @@
   #define LEVELED_SEGMENT_LENGTH 1.0 // (mm) Length of all segments (except the last one)
 
   /**
-   * Enable the G26 Mesh Validation Pattern tool.
+   * Disable the G26 Mesh Validation Pattern tool.
    */
-  #define G26_MESH_VALIDATION
+  //#define G26_MESH_VALIDATION
   #if ENABLED(G26_MESH_VALIDATION)
     #define MESH_TEST_NOZZLE_SIZE    0.4  // (mm) Diameter of primary nozzle.
     #define MESH_TEST_LAYER_HEIGHT   0.2  // (mm) Default layer height for the G26 Mesh Validation Tool.
@@ -1384,7 +1386,7 @@
  *    P1  Raise the nozzle always to Z-park height.
  *    P2  Raise the nozzle by Z-park amount, limited to Z_MAX_POS.
  */
-// @advi3++: Enable nozzle parking
+// @advi3++: Ensable nozzle parking
 #define NOZZLE_PARK_FEATURE
 
 #if ENABLED(NOZZLE_PARK_FEATURE)

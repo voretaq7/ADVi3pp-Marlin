@@ -87,7 +87,7 @@ namespace
 #elif defined(ADVi3PP_BLTOUCH)
         auto baseggio            = F("Indianagio Front");
         static const FlashChar* names[advi3pp::SensorSettings::NB_SENSOR_POSITIONS] =
-          {baseggio, teaching_tech_side, custom};
+          {custom, baseggio, teaching_tech_side};
 #endif
         assert(index < advi3pp::SensorSettings::NB_SENSOR_POSITIONS);
         return names[index];
@@ -101,9 +101,9 @@ namespace
         { -2400, -3800 },    // Teaching Tech L. Side
         {     0,     0 }     // Custom
 #elif defined(ADVi3PP_BLTOUCH)
+        { -2900, -4000 },    // Custom - MG
         {     0, -3890 },    // Baseggio Front
-        { -2400, -3800 },    // Teaching Tech L. Side
-        {     0,     0 }     // Custom
+        { -2400, -3800 }     // Teaching Tech L. Side
 #endif
     };
 #endif
