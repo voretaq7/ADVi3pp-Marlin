@@ -807,7 +807,7 @@ private:
     void save_data();
 
 private:
-    static const size_t NB_PIDs = 3;
+    static const size_t NB_PIDs = 1;
     Pid hotend_pid_[NB_PIDs] = {};
     Pid bed_pid_[NB_PIDs] = {};
     TemperatureKind kind_ = TemperatureKind::Hotend;
