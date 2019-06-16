@@ -39,7 +39,13 @@
 
 uint8_t progress_bar_percent;
 int16_t lcd_contrast;
+#if ENABLED(SDSUPPORT)
 extern int freeMemory();
+#else
+extern "C" {
+int freeMemory();
+}
+#endif
 
 #ifdef ADVi3PP_PROBE
 bool set_probe_deployed(bool);
@@ -125,7 +131,9 @@ inline namespace singletons
     LoadUnload load_unload;
     Preheat preheat;
     Move move;
+#if ENABLED(SDSUPPORT)
     SdCard sd_card;
+#endif
     FactoryReset factory_reset;
     ManualLeveling manual_leveling;
     ExtruderTuning extruder_tuning;
@@ -310,15 +318,20 @@ void Screens::show_print()
         return;
     }
 
+#if ENABLED(SDSUPPORT)
     wait.show(F("Try to access the SD card..."));
     task.set_background_task(BackgroundTask{this, &Screens::show_sd_or_temp_page});
+#else
+    // No SD card so just show Temperatures
+    temperatures.show(ShowOptions::None);
+#endif
 }
 
+#if ENABLED(SDSUPPORT)
 //! Show the SD card page (if a SD card is inserted) or the Temperature page
 void Screens::show_sd_or_temp_page()
 {
     task.clear_background_task();
-
     card.initsd(); // Can take some time
     advi3pp.reset_status();
     if(!card.cardOK)
@@ -330,6 +343,8 @@ void Screens::show_sd_or_temp_page()
 
     sd_card.show(ShowOptions::None);
 }
+#endif
+
 
 // --------------------------------------------------------------------
 // Wait
@@ -1239,7 +1254,7 @@ void ManualLeveling::pointD_command()
     enqueue_and_echo_commands_P(PSTR("G1 Z0 F1200"));
 }
 
-
+#if ENABLED(SDSUPPORT)
 // --------------------------------------------------------------------
 // SD Card
 // --------------------------------------------------------------------
@@ -1278,6 +1293,7 @@ Page SdCard::do_prepare_page()
 //! Show first SD card page
 void SdCard::show_first_page()
 {
+#if ENABLED(SDSUPPORT)
 	if(!card.cardOK)
 		return;
 
@@ -1286,11 +1302,15 @@ void SdCard::show_first_page()
 	last_file_index_ = nb_files_ > 0 ? nb_files_ - 1 : 0;
 
     show_current_page();
+#else
+	return;
+#endif
 }
 
 //! Handle Page Down command.
 void SdCard::down_command()
 {
+#if ENABLED(SDSUPPORT)
 	if(!card.cardOK)
 		return;
 
@@ -1300,11 +1320,13 @@ void SdCard::down_command()
 		last_file_index_ -= nb_visible_sd_files;
         show_current_page();
     }
+#endif
 }
 
 //! Handle Page Up command.
 void SdCard::up_command()
 {
+#if ENABLED(SDSUPPORT)
 	if(!card.cardOK)
 		return;
 
@@ -1314,11 +1336,13 @@ void SdCard::up_command()
 		last_file_index_ += nb_visible_sd_files;
         show_current_page();
     }
+#endif
 }
 
 //! Show the list of files on SD (current page)
 void SdCard::show_current_page()
 {
+#if ENABLED(SDSUPPORT)
     WriteRamDataRequest frame{Variable::LongText0};
 
     ADVString<sd_file_length> name;
@@ -1335,6 +1359,7 @@ void SdCard::show_current_page()
     frame.reset(Variable::Value0);
     frame << Uint16(page_index_ + 1);
     frame.send();
+#endif
 }
 
 //! Get a filename with a given index.
@@ -1342,6 +1367,7 @@ void SdCard::show_current_page()
 //! @param name     Copy the filename into this Chars
 void SdCard::get_file_name(uint8_t index_in_page, ADVString<sd_file_length>& name)
 {
+#if ENABLED(SDSUPPORT)
     name.reset();
 	if(last_file_index_ >= index_in_page)
 	{
@@ -1350,12 +1376,14 @@ void SdCard::get_file_name(uint8_t index_in_page, ADVString<sd_file_length>& nam
 		name += (card.longFilename[0] == 0) ? card.filename : card.longFilename;
 		if(card.filenameIsDir) name += "]";
 	}
+#endif
 }
 
 //! Select a filename as sent by the LCD screen.
 //! @param file_index    The index of the filename to select
 void SdCard::select_file_command(uint16_t file_index)
 {
+#if ENABLED(SDSUPPORT)
     if(!card.cardOK)
         return;
 
@@ -1377,7 +1405,9 @@ void SdCard::select_file_command(uint16_t file_index)
     PrintCounter::start();
 
     pages.show_page(Page::Print);
+#endif
 }
+#endif
 
 // --------------------------------------------------------------------
 // Printing
@@ -1507,9 +1537,11 @@ void Print::pause_finished(bool)
 //! @return True if a print is running.
 bool Print::is_printing() const
 {
+#if ENABLED(SDSUPPORT)
     if(card.isFileOpen())
         return card.sdprinting;
     else
+#endif
         return print_job_timer.isRunning();
 }
 

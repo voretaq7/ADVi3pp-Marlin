@@ -77,7 +77,9 @@ inline namespace singletons
     extern LoadUnload load_unload;
     extern Preheat preheat;
     extern Move move;
+#if ENABLED(SDSUPPORT)
     extern SdCard sd_card;
+#endif
     extern FactoryReset factory_reset;
     extern ManualLeveling manual_leveling;
     extern ExtruderTuning extruder_tuning;
@@ -301,13 +303,14 @@ bool ADVi3pp_::is_busy()
 {
     return busy_state != NOT_BUSY || Planner::has_blocks_queued();
 }
-
 //! Update the progress bar if the printer is printing for the SD card
 void ADVi3pp_::update_progress()
 {
+#if ENABLED(SDSUPPORT)
     // Progress bar % comes from SD when actively printing
     if(card.sdprinting)
         progress_bar_percent = card.percentDone();
+#endif
 }
 
 //! Get the current Z height (optionaly multiplied by a factor)
@@ -400,7 +403,9 @@ void ADVi3pp_::read_lcd_serial()
         case Action::LoadUnload:            load_unload.handle(key_value); break;
         case Action::Preheat:               preheat.handle(key_value); break;
         case Action::Move:                  move.handle(key_value); break;
+#if ENABLED(SDSUPPORT)
         case Action::SdCard:                sd_card.handle(key_value); break;
+#endif
         case Action::FactoryReset:          factory_reset.handle(key_value); break;
         case Action::ManualLeveling:        manual_leveling.handle(key_value); break;
         case Action::ExtruderTuning:        extruder_tuning.handle(key_value); break;
@@ -524,15 +529,18 @@ void ADVi3pp_::stop_and_wait()
 //! Set the name for the progess message. Usually, it is the name of the file printed.
 void ADVi3pp_::set_progress_name(const char* name)
 {
+#if ENABLED(SDSUPPORT)
     progress_name_ = name;
     progress_.reset().align(Alignment::Left);
     percent_ = -1;
     compute_progress();
+#endif
 }
 
 //! Compute the current progress message (name and percentage)
 void ADVi3pp_::compute_progress()
 {
+#if ENABLED(SDSUPPORT)
     auto done = card.percentDone();
     if(done == percent_)
         return;
@@ -542,14 +550,17 @@ void ADVi3pp_::compute_progress()
 		progress_  << " " << done << "%";
     progress_.align(Alignment::Left);
     percent_ = done;
+#endif
 }
 
 //! Clear the progress message
 void ADVi3pp_::reset_progress()
 {
+#if ENABLED(SDSUPPORT)
     progress_name_.reset();
     progress_.reset().align(Alignment::Left);
     percent_ = -1;
+#endif
 }
 
 //! Enable or disable the buzzer
@@ -759,4 +770,3 @@ bool Task::has_background_task() const
 // --------------------------------------------------------------------
 
 }
-
