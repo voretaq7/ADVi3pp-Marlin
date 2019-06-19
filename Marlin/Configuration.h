@@ -879,7 +879,7 @@
 // The number of probes to perform at each point.
 //   Set to 2 for a fast/slow probe, using the second probe result.
 //   Set to 3 or more for slow probes, averaging the results.
-// @advi3++: Experimental - only one measure
+// @advi3++: Fast/Slow probe
 #define MULTIPLE_PROBING 2
 
 /**
@@ -1360,12 +1360,12 @@
 //
 // G20/G21 Inch mode support
 //
-#define INCH_MODE_SUPPORT // @advi3++: Used by some starting code
+//#define INCH_MODE_SUPPORT // MG: Always in mm mode. Inch mode will error.
 
 //
 // M149 Set temperature units support
 //
-#define TEMPERATURE_UNITS_SUPPORT // @advi3++: Used by some starting code
+//#define TEMPERATURE_UNITS_SUPPORT // MG: Always in Celsius.
 
 // @section temperature
 

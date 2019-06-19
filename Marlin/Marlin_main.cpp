@@ -12785,6 +12785,8 @@ void process_parsed_command() {
       #if ENABLED(INCH_MODE_SUPPORT)
         case 20: gcode_G20(); break;                              // G20: Inch Units
         case 21: gcode_G21(); break;                              // G21: Millimeter Units
+      #else
+        case 21: NOOP; break;                                     // No inch mode means always milimeter mode.
       #endif
 
       #if ENABLED(G26_MESH_VALIDATION)
