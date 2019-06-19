@@ -106,7 +106,7 @@
    * Marlin repository.
    */
   // @advi3++: ADVi3++ sources 
-  #define SOURCE_CODE_URL "https://github.com/andrivet/ADVi3pp"
+  #define SOURCE_CODE_URL "https://github.com/voretaq7/ADVi3pp-Marlin"
 
   /**
    * Default generic printer UUID.
